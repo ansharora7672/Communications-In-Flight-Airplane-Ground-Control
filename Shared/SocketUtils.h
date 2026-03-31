@@ -2,6 +2,11 @@
 
 #include <winsock2.h>
 
+#include <climits>
+#include <cstdint>
+#include <memory>
+#include <new>
+
 inline bool sendAll(SOCKET socketHandle, const void* buffer, int totalBytes)
 {
     const char* current = static_cast<const char*>(buffer);
@@ -18,6 +23,50 @@ inline bool sendAll(SOCKET socketHandle, const void* buffer, int totalBytes)
         sentBytes += bytesSent;
     }
 
+    return true;
+}
+
+inline bool sendBuffer(SOCKET socketHandle, const void* buffer, uint32_t totalBytes)
+{
+    if (totalBytes == 0)
+    {
+        return true;
+    }
+
+    if (totalBytes > static_cast<uint32_t>(INT_MAX))
+    {
+        return false;
+    }
+
+    return sendAll(socketHandle, buffer, static_cast<int>(totalBytes));
+}
+
+inline bool receiveDynamicBuffer(SOCKET socketHandle, uint32_t payloadSize, std::unique_ptr<uint8_t[]>& payloadBuffer)
+{
+    payloadBuffer.reset();
+
+    if (payloadSize == 0)
+    {
+        return true;
+    }
+
+    if (payloadSize > static_cast<uint32_t>(INT_MAX))
+    {
+        return false;
+    }
+
+    std::unique_ptr<uint8_t[]> buffer(new (std::nothrow) uint8_t[payloadSize]);
+    if (!buffer)
+    {
+        return false;
+    }
+
+    if (!recvAll(socketHandle, buffer.get(), static_cast<int>(payloadSize)))
+    {
+        return false;
+    }
+
+    payloadBuffer = std::move(buffer);
     return true;
 }
 

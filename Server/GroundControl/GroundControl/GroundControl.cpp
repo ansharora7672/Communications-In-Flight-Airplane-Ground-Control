@@ -1,5 +1,6 @@
 #include <iostream>
 #include <iomanip>
+#include <memory>
 #include <string>
 #include <winsock2.h>
 
@@ -14,6 +15,26 @@ using namespace std;
 namespace
 {
     const unsigned short kServerPort = 5000;
+
+    bool sendPacket(SOCKET socketHandle, const PacketHeader& header, const void* payload)
+    {
+        if (!sendAll(socketHandle, &header, static_cast<int>(sizeof(header))))
+        {
+            return false;
+        }
+
+        return sendBuffer(socketHandle, payload, header.payload_size);
+    }
+
+    bool receivePacket(SOCKET socketHandle, PacketHeader& header, unique_ptr<uint8_t[]>& payloadBuffer)
+    {
+        if (!recvAll(socketHandle, &header, static_cast<int>(sizeof(header))))
+        {
+            return false;
+        }
+
+        return receiveDynamicBuffer(socketHandle, header.payload_size, payloadBuffer);
+    }
 }
 
 struct ServerDashboard
@@ -167,7 +188,8 @@ int main()
         drawServerDashboard(ui);
 
         PacketHeader handshakeRequest = {};
-        if (!recvAll(clientSocket, &handshakeRequest, static_cast<int>(sizeof(handshakeRequest))))
+        unique_ptr<uint8_t[]> handshakePayload;
+        if (!receivePacket(clientSocket, handshakeRequest, handshakePayload))
         {
             ui.connectionStatus = "NO CLIENT";
             ui.operatorState = "DISCONNECTED";
@@ -191,7 +213,7 @@ int main()
             handshakeAck.sequence_number = handshakeRequest.sequence_number;
             handshakeAck.payload_size = 0;
 
-            if (!sendAll(clientSocket, &handshakeAck, static_cast<int>(sizeof(handshakeAck))))
+            if (!sendPacket(clientSocket, handshakeAck, NULL))
             {
                 ui.connectionStatus = "NO CLIENT";
                 ui.operatorState = "FAULT";
@@ -209,6 +231,8 @@ int main()
                 cout << "Handshake completed on port " << kServerPort << endl;
             }
         }
+
+        handshakePayload.reset();
     }
 
     // Cleanup

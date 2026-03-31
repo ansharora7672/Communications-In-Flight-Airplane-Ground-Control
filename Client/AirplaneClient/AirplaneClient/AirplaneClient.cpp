@@ -1,5 +1,6 @@
 #include <iostream>
 #include <iomanip>
+#include <memory>
 #include <string>
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -15,6 +16,26 @@ namespace
 {
     const char* const kServerIpAddress = "127.0.0.1";
     const unsigned short kServerPort = 5000;
+
+    bool sendPacket(SOCKET socketHandle, const PacketHeader& header, const void* payload)
+    {
+        if (!sendAll(socketHandle, &header, static_cast<int>(sizeof(header))))
+        {
+            return false;
+        }
+
+        return sendBuffer(socketHandle, payload, header.payload_size);
+    }
+
+    bool receivePacket(SOCKET socketHandle, PacketHeader& header, unique_ptr<uint8_t[]>& payloadBuffer)
+    {
+        if (!recvAll(socketHandle, &header, static_cast<int>(sizeof(header))))
+        {
+            return false;
+        }
+
+        return receiveDynamicBuffer(socketHandle, header.payload_size, payloadBuffer);
+    }
 }
 
 struct ClientDashboard
@@ -159,7 +180,7 @@ int main()
     handshakeRequest.sequence_number = 1;
     handshakeRequest.payload_size = 0;
 
-    if (!sendAll(connectSocket, &handshakeRequest, static_cast<int>(sizeof(handshakeRequest))))
+    if (!sendPacket(connectSocket, handshakeRequest, NULL))
     {
         ui.connectionStatus = "DISCONNECTED";
         ui.clientState = "HANDSHAKE_SEND_ERROR";
@@ -175,7 +196,8 @@ int main()
     drawClientDashboard(ui);
 
     PacketHeader handshakeAck = {};
-    if (!recvAll(connectSocket, &handshakeAck, static_cast<int>(sizeof(handshakeAck))))
+    unique_ptr<uint8_t[]> handshakePayload;
+    if (!receivePacket(connectSocket, handshakeAck, handshakePayload))
     {
         ui.connectionStatus = "DISCONNECTED";
         ui.clientState = "HANDSHAKE_RX_ERROR";
@@ -200,6 +222,8 @@ int main()
         WSACleanup();
         return 1;
     }
+
+    handshakePayload.reset();
 
     ui.clientState = "CONNECTED";
     ui.lastPacket = "HANDSHAKE_ACK";
