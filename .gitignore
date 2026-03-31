@@ -1,0 +1,27 @@
+# Compiled Executables and Objects
+*.com
+*.class
+*.dll
+*.exe
+*.o
+*.so
+*.obj
+*.pdb
+*.ilk
+
+# Qt Specific temporary build files
+build/
+build-*/
+*.user
+*.user.*
+moc_*.cpp
+ui_*.h
+qrc_*.cpp
+Makefile*
+
+# Visual Studio Specific hidden folders
+.vs/
+*.sln.docstates
+*.suo
+*.userosscache
+*.sln.userprefs
