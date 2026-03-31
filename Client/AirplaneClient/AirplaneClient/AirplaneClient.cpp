@@ -64,10 +64,14 @@ void drawClientDashboard(const ClientDashboard& s)
     cout << setw(22) << "Heading (deg)" << ": " << s.heading << '\n';
 
     printDivider('-');
-    cout << "Client Connection Flow\n";
+    cout << "Pilot Actions\n";
     printDivider('-');
-    cout << "This build is currently showing the UI dashboard only.\n";
-    cout << "Connection logic runs automatically using the existing socket code.\n";
+    cout << "1. Connect to Ground Control\n";
+    cout << "2. Disconnect\n";
+    cout << "3. Send Handshake Request\n";
+    cout << "4. Transmit Telemetry Packet\n";
+    cout << "5. Request Weather Map\n";
+    cout << "0. Exit\n";
 
     printDivider();
 }
