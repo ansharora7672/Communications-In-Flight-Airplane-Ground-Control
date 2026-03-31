@@ -25,3 +25,18 @@ Makefile*
 *.suo
 *.userosscache
 *.sln.userprefs
+
+# Visual Studio Build Folders
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+
+# Specific VS junk
+*.tlog
+*.log
+*.lastbuildstate
+*.recipe
+*.idb
+*.ipch
+*.aps
