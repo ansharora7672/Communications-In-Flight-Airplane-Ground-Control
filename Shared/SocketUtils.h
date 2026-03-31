@@ -41,6 +41,25 @@ inline bool sendBuffer(SOCKET socketHandle, const void* buffer, uint32_t totalBy
     return sendAll(socketHandle, buffer, static_cast<int>(totalBytes));
 }
 
+inline bool recvAll(SOCKET socketHandle, void* buffer, int totalBytes)
+{
+    char* current = static_cast<char*>(buffer);
+    int receivedBytes = 0;
+
+    while (receivedBytes < totalBytes)
+    {
+        const int bytesReceived = recv(socketHandle, current + receivedBytes, totalBytes - receivedBytes, 0);
+        if (bytesReceived == SOCKET_ERROR || bytesReceived == 0)
+        {
+            return false;
+        }
+
+        receivedBytes += bytesReceived;
+    }
+
+    return true;
+}
+
 inline bool receiveDynamicBuffer(SOCKET socketHandle, uint32_t payloadSize, std::unique_ptr<uint8_t[]>& payloadBuffer)
 {
     payloadBuffer.reset();
@@ -67,24 +86,5 @@ inline bool receiveDynamicBuffer(SOCKET socketHandle, uint32_t payloadSize, std:
     }
 
     payloadBuffer = std::move(buffer);
-    return true;
-}
-
-inline bool recvAll(SOCKET socketHandle, void* buffer, int totalBytes)
-{
-    char* current = static_cast<char*>(buffer);
-    int receivedBytes = 0;
-
-    while (receivedBytes < totalBytes)
-    {
-        const int bytesReceived = recv(socketHandle, current + receivedBytes, totalBytes - receivedBytes, 0);
-        if (bytesReceived == SOCKET_ERROR || bytesReceived == 0)
-        {
-            return false;
-        }
-
-        receivedBytes += bytesReceived;
-    }
-
     return true;
 }
