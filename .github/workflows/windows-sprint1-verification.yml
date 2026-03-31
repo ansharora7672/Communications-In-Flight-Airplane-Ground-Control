@@ -1,0 +1,71 @@
+name: Windows Sprint 1 Verification
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  verify-sprint1:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Build server solution
+        run: msbuild Server/GroundControl/GroundControl.sln /p:Configuration=Debug /p:Platform=x64
+
+      - name: Build client solution
+        run: msbuild Client/AirplaneClient/AirplaneClient.sln /p:Configuration=Debug /p:Platform=x64
+
+      - name: Run server and client and collect logs
+        shell: pwsh
+        run: |
+          $serverExe = Get-ChildItem -Path Server -Filter GroundControl.exe -Recurse | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          $clientExe = Get-ChildItem -Path Client -Filter AirplaneClient.exe -Recurse | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+
+          if (-not $serverExe) { throw "GroundControl.exe was not found after build." }
+          if (-not $clientExe) { throw "AirplaneClient.exe was not found after build." }
+
+          $server = Start-Process -FilePath $serverExe.FullName -WorkingDirectory $serverExe.DirectoryName -PassThru
+          Start-Sleep -Seconds 2
+          $client = Start-Process -FilePath $clientExe.FullName -WorkingDirectory $clientExe.DirectoryName -PassThru
+
+          $client.WaitForExit()
+          $server.WaitForExit()
+
+          if ($client.ExitCode -ne 0) { throw "Client exited with code $($client.ExitCode)." }
+          if ($server.ExitCode -ne 0) { throw "Server exited with code $($server.ExitCode)." }
+
+          $clientLog = Join-Path $clientExe.DirectoryName "client_packet_log.txt"
+          $serverLog = Join-Path $serverExe.DirectoryName "server_packet_log.txt"
+
+          if (-not (Test-Path $clientLog)) { throw "Client log file was not created." }
+          if (-not (Test-Path $serverLog)) { throw "Server log file was not created." }
+
+          if ((Get-Item $clientLog).Length -le 0) { throw "Client log file is empty." }
+          if ((Get-Item $serverLog).Length -le 0) { throw "Server log file is empty." }
+
+          $clientLogText = Get-Content $clientLog -Raw
+          $serverLogText = Get-Content $serverLog -Raw
+
+          if ($clientLogText -notmatch "TX HANDSHAKE_REQUEST") { throw "Client log is missing the handshake request entry." }
+          if ($clientLogText -notmatch "RX HANDSHAKE_ACK") { throw "Client log is missing the handshake acknowledgement entry." }
+          if ($serverLogText -notmatch "RX HANDSHAKE_REQUEST") { throw "Server log is missing the handshake request entry." }
+          if ($serverLogText -notmatch "TX HANDSHAKE_ACK") { throw "Server log is missing the handshake acknowledgement entry." }
+
+          New-Item -ItemType Directory -Force -Path ci-artifacts | Out-Null
+          Copy-Item $clientLog -Destination ci-artifacts/client_packet_log.txt -Force
+          Copy-Item $serverLog -Destination ci-artifacts/server_packet_log.txt -Force
+
+      - name: Upload packet logs
+        uses: actions/upload-artifact@v4
+        with:
+          name: sprint1-packet-logs
+          path: ci-artifacts

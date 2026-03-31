@@ -4,6 +4,7 @@
 #include <string>
 #include <winsock2.h>
 
+#include "../../../Shared/PacketLogger.h"
 #include "../../../Shared/SocketUtils.h"
 #include "PacketHeader.h"
 #include "ServerState.h"
@@ -15,6 +16,26 @@ using namespace std;
 namespace
 {
     const unsigned short kServerPort = 5000;
+    const char* const kServerLogFile = "server_packet_log.txt";
+
+    const char* packetTypeToString(PacketType packetType)
+    {
+        switch (packetType)
+        {
+        case PacketType::HandshakeRequest:
+            return "HANDSHAKE_REQUEST";
+        case PacketType::HandshakeAck:
+            return "HANDSHAKE_ACK";
+        case PacketType::Telemetry:
+            return "TELEMETRY";
+        case PacketType::LargeFile:
+            return "LARGE_FILE";
+        case PacketType::Command:
+            return "COMMAND";
+        default:
+            return "UNKNOWN";
+        }
+    }
 
     bool sendPacket(SOCKET socketHandle, const PacketHeader& header, const void* payload)
     {
@@ -113,12 +134,22 @@ int main()
     SOCKET listenSocket = INVALID_SOCKET;
     SOCKET clientSocket = INVALID_SOCKET;
     struct sockaddr_in serverAddr = {};
+    PacketLogger packetLogger(kServerLogFile);
 
     // current server state is disconnected
     ServerState currentState = STATE_DISCONNECTED;
 
     ServerDashboard ui;
     drawServerDashboard(ui);
+
+    if (!packetLogger.isOpen())
+    {
+        ui.operatorState = "LOG_ERROR";
+        ui.lastEvent = "Packet log creation failed";
+        drawServerDashboard(ui);
+        cout << "Unable to create packet log file." << endl;
+        return 1;
+    }
 
     // initializing socket
     if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0)
@@ -207,6 +238,12 @@ int main()
         }
         else
         {
+            packetLogger.logPacket("RX",
+                                   packetTypeToString(handshakeRequest.packet_type),
+                                   handshakeRequest.aircraft_id,
+                                   handshakeRequest.sequence_number,
+                                   handshakeRequest.payload_size);
+
             PacketHeader handshakeAck = {};
             handshakeAck.packet_type = PacketType::HandshakeAck;
             handshakeAck.aircraft_id = handshakeRequest.aircraft_id;
@@ -223,6 +260,12 @@ int main()
             }
             else
             {
+                packetLogger.logPacket("TX",
+                                       packetTypeToString(handshakeAck.packet_type),
+                                       handshakeAck.aircraft_id,
+                                       handshakeAck.sequence_number,
+                                       handshakeAck.payload_size);
+
                 currentState = STATE_CONNECTED;
                 ui.operatorState = "CONNECTED";
                 ui.selectedAircraft = "AC-101";

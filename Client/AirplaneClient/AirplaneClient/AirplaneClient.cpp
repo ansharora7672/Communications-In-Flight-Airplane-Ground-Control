@@ -5,6 +5,7 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 
+#include "../../../Shared/PacketLogger.h"
 #include "../../../Shared/SocketUtils.h"
 #include "PacketHeader.h"
 
@@ -16,6 +17,27 @@ namespace
 {
     const char* const kServerIpAddress = "127.0.0.1";
     const unsigned short kServerPort = 5000;
+    const uint32_t kAircraftId = 101;
+    const char* const kClientLogFile = "client_packet_log.txt";
+
+    const char* packetTypeToString(PacketType packetType)
+    {
+        switch (packetType)
+        {
+        case PacketType::HandshakeRequest:
+            return "HANDSHAKE_REQUEST";
+        case PacketType::HandshakeAck:
+            return "HANDSHAKE_ACK";
+        case PacketType::Telemetry:
+            return "TELEMETRY";
+        case PacketType::LargeFile:
+            return "LARGE_FILE";
+        case PacketType::Command:
+            return "COMMAND";
+        default:
+            return "UNKNOWN";
+        }
+    }
 
     bool sendPacket(SOCKET socketHandle, const PacketHeader& header, const void* payload)
     {
@@ -111,9 +133,19 @@ int main()
     WSADATA wsaData = {};
     SOCKET connectSocket = INVALID_SOCKET;
     struct sockaddr_in serverAddr = {};
+    PacketLogger packetLogger(kClientLogFile);
 
     ClientDashboard ui;
     drawClientDashboard(ui);
+
+    if (!packetLogger.isOpen())
+    {
+        ui.clientState = "LOG_ERROR";
+        ui.lastPacket = "LOG_INIT_FAILED";
+        drawClientDashboard(ui);
+        cout << "Unable to create packet log file." << endl;
+        return 1;
+    }
 
     // socket initializing
     if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0)
@@ -176,7 +208,7 @@ int main()
 
     PacketHeader handshakeRequest = {};
     handshakeRequest.packet_type = PacketType::HandshakeRequest;
-    handshakeRequest.aircraft_id = 101;
+    handshakeRequest.aircraft_id = kAircraftId;
     handshakeRequest.sequence_number = 1;
     handshakeRequest.payload_size = 0;
 
@@ -191,6 +223,12 @@ int main()
         WSACleanup();
         return 1;
     }
+
+    packetLogger.logPacket("TX",
+                           packetTypeToString(handshakeRequest.packet_type),
+                           handshakeRequest.aircraft_id,
+                           handshakeRequest.sequence_number,
+                           handshakeRequest.payload_size);
 
     ui.lastPacket = "HANDSHAKE_REQUEST";
     drawClientDashboard(ui);
@@ -208,6 +246,12 @@ int main()
         WSACleanup();
         return 1;
     }
+
+    packetLogger.logPacket("RX",
+                           packetTypeToString(handshakeAck.packet_type),
+                           handshakeAck.aircraft_id,
+                           handshakeAck.sequence_number,
+                           handshakeAck.payload_size);
 
     if (handshakeAck.packet_type != PacketType::HandshakeAck ||
         handshakeAck.aircraft_id != handshakeRequest.aircraft_id ||
