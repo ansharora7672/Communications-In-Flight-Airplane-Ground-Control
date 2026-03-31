@@ -1,8 +1,76 @@
 #include <iostream>
-using namespace std;
+#include <iomanip>
+#include <string>
 #include <winsock2.h>
 #include <ws2tcpip.h>
+
 #pragma comment(lib, "ws2_32.lib")
+
+using namespace std;
+
+struct ClientDashboard
+{
+    string connectionStatus = "DISCONNECTED";
+    string telemetryHealth = "NORMAL";
+    string aircraftId = "AC-101";
+    string clientState = "IDLE";
+    string lastPacket = "NONE";
+    string weatherMapStatus = "NOT REQUESTED";
+
+    double latitude = 43.6532;
+    double longitude = -79.3832;
+    double altitude = 32000.0;
+    double speed = 450.0;
+    double heading = 78.0;
+};
+
+void clearScreen()
+{
+    system("cls");
+}
+
+void printDivider(char ch = '=')
+{
+    cout << string(64, ch) << '\n';
+}
+
+void drawClientDashboard(const ClientDashboard& s)
+{
+    clearScreen();
+
+    printDivider();
+    cout << "                   AIRCRAFT CLIENT CONSOLE\n";
+    printDivider();
+
+    cout << left;
+    cout << setw(22) << "Connection Status" << ": " << s.connectionStatus << '\n';
+    cout << setw(22) << "Telemetry Health" << ": " << s.telemetryHealth << '\n';
+    cout << setw(22) << "Aircraft ID" << ": " << s.aircraftId << '\n';
+    cout << setw(22) << "Client State" << ": " << s.clientState << '\n';
+    cout << setw(22) << "Last Packet" << ": " << s.lastPacket << '\n';
+    cout << setw(22) << "Weather Map" << ": " << s.weatherMapStatus << '\n';
+
+    printDivider('-');
+    cout << "Telemetry Output\n";
+    printDivider('-');
+
+    cout << fixed << setprecision(4);
+    cout << setw(22) << "Latitude" << ": " << s.latitude << '\n';
+    cout << setw(22) << "Longitude" << ": " << s.longitude << '\n';
+
+    cout << setprecision(1);
+    cout << setw(22) << "Altitude (ft)" << ": " << s.altitude << '\n';
+    cout << setw(22) << "Speed (knots)" << ": " << s.speed << '\n';
+    cout << setw(22) << "Heading (deg)" << ": " << s.heading << '\n';
+
+    printDivider('-');
+    cout << "Client Connection Flow\n";
+    printDivider('-');
+    cout << "This build is currently showing the UI dashboard only.\n";
+    cout << "Connection logic runs automatically using the existing socket code.\n";
+
+    printDivider();
+}
 
 int main()
 {
@@ -10,16 +78,27 @@ int main()
     SOCKET connectSocket = INVALID_SOCKET;
     struct sockaddr_in serverAddr;
 
-    // socket initialzing
-    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
+    ClientDashboard ui;
+    drawClientDashboard(ui);
+
+    // socket initializing
+    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0)
+    {
+        ui.clientState = "STARTUP_ERROR";
+        drawClientDashboard(ui);
         cout << "Winsock initialization failed!" << endl;
         return 1;
     }
 
+    ui.clientState = "WINSOCK_READY";
+    drawClientDashboard(ui);
 
-    // socker create
+    // socket create
     connectSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (connectSocket == INVALID_SOCKET) {
+    if (connectSocket == INVALID_SOCKET)
+    {
+        ui.clientState = "SOCKET_ERROR";
+        drawClientDashboard(ui);
         cout << "Socket creation failed!" << endl;
         WSACleanup();
         return 1;
@@ -29,35 +108,54 @@ int main()
     serverAddr.sin_family = AF_INET;
     serverAddr.sin_port = htons(5000);
 
-    if (inet_pton(AF_INET, "127.0.0.1", &serverAddr.sin_addr) <= 0) {
+    if (inet_pton(AF_INET, "127.0.0.1", &serverAddr.sin_addr) <= 0)
+    {
+        ui.clientState = "ADDRESS_ERROR";
+        drawClientDashboard(ui);
         cout << "Invalid address / Address not supported" << endl;
         closesocket(connectSocket);
         WSACleanup();
         return 1;
     }
 
+    ui.clientState = "CONNECTING";
+    drawClientDashboard(ui);
     cout << "Connecting to Ground Control at 127.0.0.1:5000..." << endl;
 
     // actual connection establishing
-    if (connect(connectSocket, (struct sockaddr*)&serverAddr, sizeof(serverAddr)) == SOCKET_ERROR) {
+    if (connect(connectSocket, (struct sockaddr*)&serverAddr, sizeof(serverAddr)) == SOCKET_ERROR)
+    {
+        ui.connectionStatus = "FAILED";
+        ui.clientState = "CONNECT_FAILED";
+        drawClientDashboard(ui);
         cout << "Connection failed! Is the server running?" << endl;
         closesocket(connectSocket);
         WSACleanup();
         return 1;
     }
 
+    ui.connectionStatus = "CONNECTED";
+    ui.clientState = "CONNECTED";
+    ui.lastPacket = "TCP_CONNECT";
+    drawClientDashboard(ui);
     cout << "Successfully connected to Ground Control!" << endl;
 
     string testMsg = "sending from client aircraft";
     send(connectSocket, testMsg.c_str(), (int)testMsg.length(), 0);
 
+    ui.lastPacket = "HANDSHAKE_REQUEST";
+    ui.clientState = "MESSAGE_SENT";
+    drawClientDashboard(ui);
     cout << "[CLIENT] Sent message: " << testMsg << endl;
 
     closesocket(connectSocket);
     WSACleanup();
 
+    ui.connectionStatus = "DISCONNECTED";
+    ui.clientState = "COMPLETE";
+    ui.lastPacket = "DISCONNECT";
+    drawClientDashboard(ui);
     cout << "[CLIENT] Disconnected." << endl;
+
     return 0;
-
 }
-
