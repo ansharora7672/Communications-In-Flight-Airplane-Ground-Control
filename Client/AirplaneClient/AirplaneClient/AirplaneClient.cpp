@@ -8,6 +8,12 @@
 
 using namespace std;
 
+namespace
+{
+    const char* const kServerIpAddress = "127.0.0.1";
+    const unsigned short kServerPort = 5000;
+}
+
 struct ClientDashboard
 {
     string connectionStatus = "DISCONNECTED";
@@ -78,9 +84,9 @@ void drawClientDashboard(const ClientDashboard& s)
 
 int main()
 {
-    WSADATA wsaData;
+    WSADATA wsaData = {};
     SOCKET connectSocket = INVALID_SOCKET;
-    struct sockaddr_in serverAddr;
+    struct sockaddr_in serverAddr = {};
 
     ClientDashboard ui;
     drawClientDashboard(ui);
@@ -110,9 +116,9 @@ int main()
 
     // ground control address
     serverAddr.sin_family = AF_INET;
-    serverAddr.sin_port = htons(5000);
+    serverAddr.sin_port = htons(kServerPort);
 
-    if (inet_pton(AF_INET, "127.0.0.1", &serverAddr.sin_addr) <= 0)
+    if (inet_pton(AF_INET, kServerIpAddress, &serverAddr.sin_addr) <= 0)
     {
         ui.clientState = "ADDRESS_ERROR";
         drawClientDashboard(ui);
@@ -124,7 +130,7 @@ int main()
 
     ui.clientState = "CONNECTING";
     drawClientDashboard(ui);
-    cout << "Connecting to Ground Control at 127.0.0.1:5000..." << endl;
+    cout << "Connecting to Ground Control at " << kServerIpAddress << ":" << kServerPort << "..." << endl;
 
     // actual connection establishing
     if (connect(connectSocket, (struct sockaddr*)&serverAddr, sizeof(serverAddr)) == SOCKET_ERROR)
@@ -143,14 +149,6 @@ int main()
     ui.lastPacket = "TCP_CONNECT";
     drawClientDashboard(ui);
     cout << "Successfully connected to Ground Control!" << endl;
-
-    string testMsg = "sending from client aircraft";
-    send(connectSocket, testMsg.c_str(), (int)testMsg.length(), 0);
-
-    ui.lastPacket = "HANDSHAKE_REQUEST";
-    ui.clientState = "MESSAGE_SENT";
-    drawClientDashboard(ui);
-    cout << "[CLIENT] Sent message: " << testMsg << endl;
 
     closesocket(connectSocket);
     WSACleanup();

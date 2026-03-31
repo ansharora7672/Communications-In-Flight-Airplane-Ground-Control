@@ -8,6 +8,11 @@
 
 using namespace std;
 
+namespace
+{
+    const unsigned short kServerPort = 5000;
+}
+
 struct ServerDashboard
 {
     string serverStatus = "OFFLINE";
@@ -80,10 +85,10 @@ void drawServerDashboard(const ServerDashboard& s)
 
 int main()
 {
-    WSADATA wsaData;
+    WSADATA wsaData = {};
     SOCKET listenSocket = INVALID_SOCKET;
     SOCKET clientSocket = INVALID_SOCKET;
-    struct sockaddr_in serverAddr;
+    struct sockaddr_in serverAddr = {};
 
     // current server state is disconnected
     ServerState currentState = STATE_DISCONNECTED;
@@ -92,17 +97,52 @@ int main()
     drawServerDashboard(ui);
 
     // initializing socket
-    WSAStartup(MAKEWORD(2, 2), &wsaData);
+    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0)
+    {
+        ui.operatorState = "STARTUP_ERROR";
+        ui.lastEvent = "Winsock initialization failed";
+        drawServerDashboard(ui);
+        cout << "Winsock initialization failed!" << endl;
+        return 1;
+    }
 
     // creating socket and binding
     listenSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (listenSocket == INVALID_SOCKET)
+    {
+        ui.operatorState = "SOCKET_ERROR";
+        ui.lastEvent = "Socket creation failed";
+        drawServerDashboard(ui);
+        cout << "Server socket creation failed!" << endl;
+        WSACleanup();
+        return 1;
+    }
 
     serverAddr.sin_family = AF_INET;
     serverAddr.sin_addr.s_addr = INADDR_ANY;
-    serverAddr.sin_port = htons(5000);
+    serverAddr.sin_port = htons(kServerPort);
 
-    bind(listenSocket, (struct sockaddr*)&serverAddr, sizeof(serverAddr));
-    listen(listenSocket, SOMAXCONN);
+    if (bind(listenSocket, (struct sockaddr*)&serverAddr, sizeof(serverAddr)) == SOCKET_ERROR)
+    {
+        ui.operatorState = "BIND_ERROR";
+        ui.lastEvent = "Bind failed on port 5000";
+        drawServerDashboard(ui);
+        cout << "Bind failed on port 5000!" << endl;
+        closesocket(listenSocket);
+        WSACleanup();
+        return 1;
+    }
+
+    if (listen(listenSocket, SOMAXCONN) == SOCKET_ERROR)
+    {
+        ui.operatorState = "LISTEN_ERROR";
+        ui.lastEvent = "Listen failed";
+        drawServerDashboard(ui);
+        cout << "Listen failed!" << endl;
+        closesocket(listenSocket);
+        WSACleanup();
+        return 1;
+    }
 
     ui.serverStatus = "ONLINE";
     ui.operatorState = "WAITING";
@@ -117,39 +157,18 @@ int main()
 
     if (clientSocket != INVALID_SOCKET)
     {
-        // changing the server state
-        currentState = STATE_HANDSHAKE_PENDING;
-
         ui.connectionStatus = "CLIENT CONNECTED";
-        ui.operatorState = "HANDSHAKE_PENDING";
-        ui.selectedAircraft = "AC-101";
-        ui.lastEvent = "Aircraft connected";
+        ui.operatorState = "CONNECTED";
+        ui.lastEvent = "TCP connection accepted";
         drawServerDashboard(ui);
-
-        // for just testing
-        char buffer[512];
-        int bytesReceived = recv(clientSocket, buffer, 512, 0);
-
-        if (bytesReceived > 0)
-        {
-            // adding null terminator
-            buffer[bytesReceived] = '\0';
-
-            ui.operatorState = "MESSAGE_RECEIVED";
-            ui.lastEvent = "Message received from aircraft";
-            ui.latitude = 43.6655;
-            ui.longitude = -79.4012;
-            ui.altitude = 32150.0;
-            ui.speed = 447.0;
-            ui.heading = 80.0;
-            drawServerDashboard(ui);
-
-            cout << "Message received from Aircraft: " << buffer << endl;
-        }
+        cout << "TCP client connected on port " << kServerPort << endl;
     }
 
     // Cleanup
-    closesocket(clientSocket);
+    if (clientSocket != INVALID_SOCKET)
+    {
+        closesocket(clientSocket);
+    }
     closesocket(listenSocket);
     WSACleanup();
 
