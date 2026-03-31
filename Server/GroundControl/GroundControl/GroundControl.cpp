@@ -2,6 +2,9 @@
 #include <iomanip>
 #include <string>
 #include <winsock2.h>
+
+#include "../../../Shared/SocketUtils.h"
+#include "PacketHeader.h"
 #include "ServerState.h"
 
 #pragma comment(lib, "ws2_32.lib")
@@ -157,11 +160,55 @@ int main()
 
     if (clientSocket != INVALID_SOCKET)
     {
+        currentState = STATE_HANDSHAKE_PENDING;
         ui.connectionStatus = "CLIENT CONNECTED";
-        ui.operatorState = "CONNECTED";
+        ui.operatorState = "HANDSHAKE_PENDING";
         ui.lastEvent = "TCP connection accepted";
         drawServerDashboard(ui);
-        cout << "TCP client connected on port " << kServerPort << endl;
+
+        PacketHeader handshakeRequest = {};
+        if (!recvAll(clientSocket, &handshakeRequest, static_cast<int>(sizeof(handshakeRequest))))
+        {
+            ui.connectionStatus = "NO CLIENT";
+            ui.operatorState = "DISCONNECTED";
+            ui.lastEvent = "Handshake request not received";
+            currentState = STATE_DISCONNECTED;
+            drawServerDashboard(ui);
+        }
+        else if (handshakeRequest.packet_type != PacketType::HandshakeRequest || handshakeRequest.payload_size != 0)
+        {
+            ui.connectionStatus = "NO CLIENT";
+            ui.operatorState = "DISCONNECTED";
+            ui.lastEvent = "Invalid handshake request";
+            currentState = STATE_DISCONNECTED;
+            drawServerDashboard(ui);
+        }
+        else
+        {
+            PacketHeader handshakeAck = {};
+            handshakeAck.packet_type = PacketType::HandshakeAck;
+            handshakeAck.aircraft_id = handshakeRequest.aircraft_id;
+            handshakeAck.sequence_number = handshakeRequest.sequence_number;
+            handshakeAck.payload_size = 0;
+
+            if (!sendAll(clientSocket, &handshakeAck, static_cast<int>(sizeof(handshakeAck))))
+            {
+                ui.connectionStatus = "NO CLIENT";
+                ui.operatorState = "FAULT";
+                ui.lastEvent = "Handshake ACK send failed";
+                currentState = STATE_FAULT;
+                drawServerDashboard(ui);
+            }
+            else
+            {
+                currentState = STATE_CONNECTED;
+                ui.operatorState = "CONNECTED";
+                ui.selectedAircraft = "AC-101";
+                ui.lastEvent = "Handshake ACK sent";
+                drawServerDashboard(ui);
+                cout << "Handshake completed on port " << kServerPort << endl;
+            }
+        }
     }
 
     // Cleanup

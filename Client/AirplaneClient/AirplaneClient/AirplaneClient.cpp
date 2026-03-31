@@ -4,6 +4,9 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 
+#include "../../../Shared/SocketUtils.h"
+#include "PacketHeader.h"
+
 #pragma comment(lib, "ws2_32.lib")
 
 using namespace std;
@@ -145,10 +148,63 @@ int main()
     }
 
     ui.connectionStatus = "CONNECTED";
-    ui.clientState = "CONNECTED";
+    ui.clientState = "HANDSHAKE_PENDING";
     ui.lastPacket = "TCP_CONNECT";
     drawClientDashboard(ui);
     cout << "Successfully connected to Ground Control!" << endl;
+
+    PacketHeader handshakeRequest = {};
+    handshakeRequest.packet_type = PacketType::HandshakeRequest;
+    handshakeRequest.aircraft_id = 101;
+    handshakeRequest.sequence_number = 1;
+    handshakeRequest.payload_size = 0;
+
+    if (!sendAll(connectSocket, &handshakeRequest, static_cast<int>(sizeof(handshakeRequest))))
+    {
+        ui.connectionStatus = "DISCONNECTED";
+        ui.clientState = "HANDSHAKE_SEND_ERROR";
+        ui.lastPacket = "HANDSHAKE_REQUEST";
+        drawClientDashboard(ui);
+        cout << "Failed to send handshake request." << endl;
+        closesocket(connectSocket);
+        WSACleanup();
+        return 1;
+    }
+
+    ui.lastPacket = "HANDSHAKE_REQUEST";
+    drawClientDashboard(ui);
+
+    PacketHeader handshakeAck = {};
+    if (!recvAll(connectSocket, &handshakeAck, static_cast<int>(sizeof(handshakeAck))))
+    {
+        ui.connectionStatus = "DISCONNECTED";
+        ui.clientState = "HANDSHAKE_RX_ERROR";
+        ui.lastPacket = "HANDSHAKE_ACK";
+        drawClientDashboard(ui);
+        cout << "Failed to receive handshake acknowledgement." << endl;
+        closesocket(connectSocket);
+        WSACleanup();
+        return 1;
+    }
+
+    if (handshakeAck.packet_type != PacketType::HandshakeAck ||
+        handshakeAck.aircraft_id != handshakeRequest.aircraft_id ||
+        handshakeAck.payload_size != 0)
+    {
+        ui.connectionStatus = "DISCONNECTED";
+        ui.clientState = "HANDSHAKE_FAILED";
+        ui.lastPacket = "INVALID_HANDSHAKE_ACK";
+        drawClientDashboard(ui);
+        cout << "Handshake failed. Client returned to disconnected state." << endl;
+        closesocket(connectSocket);
+        WSACleanup();
+        return 1;
+    }
+
+    ui.clientState = "CONNECTED";
+    ui.lastPacket = "HANDSHAKE_ACK";
+    drawClientDashboard(ui);
+    cout << "Handshake acknowledged by Ground Control." << endl;
 
     closesocket(connectSocket);
     WSACleanup();
