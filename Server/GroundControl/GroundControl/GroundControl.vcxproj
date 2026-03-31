@@ -126,7 +126,11 @@
     <ClCompile Include="GroundControl.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="LargeFilePayload.h" />
+    <ClInclude Include="PacketHeader.h" />
+    <ClInclude Include="PacketType.h" />
     <ClInclude Include="ServerState.h" />
+    <ClInclude Include="TelemetryPayload.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

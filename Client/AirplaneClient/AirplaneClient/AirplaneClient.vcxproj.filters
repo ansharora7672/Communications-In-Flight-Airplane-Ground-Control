@@ -29,5 +29,11 @@
     <ClInclude Include="PacketType.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="LargeFilePayload.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="TelemetryPayload.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

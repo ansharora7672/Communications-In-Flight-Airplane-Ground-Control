@@ -127,8 +127,10 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="ClientState.h" />
+    <ClInclude Include="LargeFilePayload.h" />
     <ClInclude Include="PacketHeader.h" />
     <ClInclude Include="PacketType.h" />
+    <ClInclude Include="TelemetryPayload.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
