@@ -1,4 +1,3 @@
-// PacketType.h
 #pragma once
 #include <cstdint>
 
