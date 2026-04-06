@@ -126,6 +126,7 @@
     <ClCompile Include="GroundControl.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="CommandGate.h" />
     <ClInclude Include="LargeFilePayload.h" />
     <ClInclude Include="PacketHeader.h" />
     <ClInclude Include="PacketType.h" />
