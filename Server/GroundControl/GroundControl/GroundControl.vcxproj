@@ -125,6 +125,7 @@
   <ItemGroup>
     <ClCompile Include="Checksum.cpp" />
     <ClCompile Include="GroundControl.cpp" />
+    <ClCompile Include="WeatherMapSender.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Checksum.h" />
@@ -136,6 +137,7 @@
     <ClInclude Include="ServerDashboardHelpers.h" />
     <ClInclude Include="ServerState.h" />
     <ClInclude Include="TelemetryPayload.h" />
+    <ClInclude Include="WeatherMapSender.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

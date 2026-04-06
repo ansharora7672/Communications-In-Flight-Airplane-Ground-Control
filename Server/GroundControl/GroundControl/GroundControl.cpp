@@ -13,6 +13,7 @@
 #include "ServerDashboardHelpers.h"
 #include "CommandGate.h"
 #include "Checksum.h"
+#include "WeatherMapSender.h"
 
 #pragma comment(lib, "ws2_32.lib")
 
@@ -358,13 +359,46 @@ int main()
                         break;
 
                     case 5:
+                    {
                         if (tryDispatchCommand(currentState, ui))
                         {
-                            ui.lastEvent = "Weather map dispatch placeholder";
-                            currentState = STATE_LARGE_FILE_TRANSFER;
-                            ui.operatorState = "LARGE_FILE_TRANSFER";
+                            const std::string weatherMapPath = "weather_map.bin";
+
+                            const uint32_t aircraftId = (ui.aircraftId == 0) ? 101 : ui.aircraftId;
+                            const uint32_t nextSequence = ui.sequenceNumber + 1;
+
+                            if (sendWeatherMapFile(clientSocket, aircraftId, nextSequence, weatherMapPath))
+                            {
+                                PacketHeader largeFileHeader = {};
+                                largeFileHeader.packet_type = PacketType::LargeFile;
+                                largeFileHeader.aircraft_id = aircraftId;
+                                largeFileHeader.sequence_number = nextSequence;
+
+                                std::vector<uint8_t> fileBytes;
+                                if (readFileBytes(weatherMapPath, fileBytes))
+                                {
+                                    largeFileHeader.payload_size = static_cast<uint32_t>(fileBytes.size());
+                                    largeFileHeader.checksum = (largeFileHeader.payload_size > 0)
+                                        ? computeChecksum(fileBytes.data(), largeFileHeader.payload_size)
+                                        : 0;
+                                }
+
+                                applyHeaderToDashboard(ui, largeFileHeader);
+                                ui.operatorState = "LARGE_FILE_TRANSFER";
+                                ui.lastEvent = "Weather map file dispatched";
+                                currentState = STATE_LARGE_FILE_TRANSFER;
+                            }
+                            else
+                            {
+                                currentState = STATE_FAULT;
+                                ui.connectionStatus = "FAULT";
+                                ui.operatorState = "FAULT";
+                                ui.telemetryAlert = "FAULT";
+                                ui.lastEvent = "Weather map dispatch failed";
+                            }
                         }
                         break;
+                    }
 
                     case 0:
                         running = false;
