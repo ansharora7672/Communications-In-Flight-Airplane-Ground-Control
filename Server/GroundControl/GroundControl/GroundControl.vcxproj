@@ -123,9 +123,11 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="Checksum.cpp" />
     <ClCompile Include="GroundControl.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="Checksum.h" />
     <ClInclude Include="CommandGate.h" />
     <ClInclude Include="LargeFilePayload.h" />
     <ClInclude Include="PacketHeader.h" />

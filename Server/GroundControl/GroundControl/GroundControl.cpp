@@ -12,6 +12,7 @@
 #include "ServerDashboard.h"
 #include "ServerDashboardHelpers.h"
 #include "CommandGate.h"
+#include "Checksum.h"
 
 #pragma comment(lib, "ws2_32.lib")
 
@@ -41,8 +42,18 @@ namespace
         }
     }
 
-    bool sendPacket(SOCKET socketHandle, const PacketHeader& header, const void* payload)
+    bool sendPacket(SOCKET socketHandle, PacketHeader header, const void* payload)
     {
+        // Compute checksum before sending
+        if (header.payload_size > 0 && payload != nullptr)
+        {
+            header.checksum = computeChecksum(payload, header.payload_size);
+        }
+        else
+        {
+            header.checksum = 0;
+        }
+
         if (!sendAll(socketHandle, &header, static_cast<int>(sizeof(header))))
         {
             return false;
@@ -58,7 +69,23 @@ namespace
             return false;
         }
 
-        return receiveDynamicBuffer(socketHandle, header.payload_size, payloadBuffer);
+        if (!receiveDynamicBuffer(socketHandle, header.payload_size, payloadBuffer))
+        {
+            return false;
+        }
+
+        // Validate checksum
+        if (header.payload_size > 0 && payloadBuffer != nullptr)
+        {
+            uint32_t computed = computeChecksum(payloadBuffer.get(), header.payload_size);
+
+            if (computed != header.checksum)
+            {
+                return false; // checksum mismatch
+            }
+        }
+
+        return true;
     }
 }
 
@@ -233,10 +260,11 @@ int main()
 
         if (!receivePacket(clientSocket, handshakeRequest, handshakePayload))
         {
-            ui.connectionStatus = "NO CLIENT";
-            ui.operatorState = "DISCONNECTED";
-            ui.lastEvent = "Handshake request not received";
-            currentState = STATE_DISCONNECTED;
+            ui.connectionStatus = "FAULT";
+            ui.operatorState = "FAULT";
+            ui.telemetryAlert = "FAULT";
+            ui.lastEvent = "Packet receive failed (checksum mismatch or connection issue)";
+            currentState = STATE_FAULT;
             drawServerDashboard(ui);
         }
         else if (handshakeRequest.packet_type != PacketType::HandshakeRequest || handshakeRequest.payload_size != 0)
