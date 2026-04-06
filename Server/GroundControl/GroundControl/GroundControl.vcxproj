@@ -129,6 +129,8 @@
     <ClInclude Include="LargeFilePayload.h" />
     <ClInclude Include="PacketHeader.h" />
     <ClInclude Include="PacketType.h" />
+    <ClInclude Include="ServerDashboard.h" />
+    <ClInclude Include="ServerDashboardHelpers.h" />
     <ClInclude Include="ServerState.h" />
     <ClInclude Include="TelemetryPayload.h" />
   </ItemGroup>

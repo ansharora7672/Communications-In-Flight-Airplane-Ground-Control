@@ -8,6 +8,9 @@
 #include "../../../Shared/SocketUtils.h"
 #include "PacketHeader.h"
 #include "ServerState.h"
+#include "TelemetryPayload.h"
+#include "ServerDashboard.h"
+#include "ServerDashboardHelpers.h"
 
 #pragma comment(lib, "ws2_32.lib")
 
@@ -58,23 +61,6 @@ namespace
     }
 }
 
-struct ServerDashboard
-{
-    string serverStatus = "OFFLINE";
-    string connectionStatus = "NO CLIENT";
-    string telemetryAlert = "STABLE";
-    string operatorState = "DISCONNECTED";
-    string selectedAircraft = "NONE";
-    string lastEvent = "SERVER NOT STARTED";
-    int listeningPort = 5000;
-
-    double latitude = 0.0;
-    double longitude = 0.0;
-    double altitude = 0.0;
-    double speed = 0.0;
-    double heading = 0.0;
-};
-
 void clearScreen()
 {
     system("cls");
@@ -101,6 +87,14 @@ void drawServerDashboard(const ServerDashboard& s)
     cout << setw(24) << "Listening Port" << ": " << s.listeningPort << '\n';
     cout << setw(24) << "Selected Aircraft" << ": " << s.selectedAircraft << '\n';
     cout << setw(24) << "Last Event" << ": " << s.lastEvent << '\n';
+
+    printDivider('-');
+    cout << "Latest Packet Data\n";
+    printDivider('-');
+    cout << setw(24) << "Packet Type" << ": " << s.packetType << '\n';
+    cout << setw(24) << "Aircraft ID" << ": " << s.aircraftId << '\n';
+    cout << setw(24) << "Sequence Number" << ": " << s.sequenceNumber << '\n';
+    cout << setw(24) << "Payload Size" << ": " << s.payloadSize << '\n';
 
     printDivider('-');
     cout << "Latest Aircraft Telemetry\n";
@@ -136,10 +130,11 @@ int main()
     struct sockaddr_in serverAddr = {};
     PacketLogger packetLogger(kServerLogFile);
 
-    // current server state is disconnected
     ServerState currentState = STATE_DISCONNECTED;
 
     ServerDashboard ui;
+    TelemetryMonitor telemetryMonitor;
+
     drawServerDashboard(ui);
 
     if (!packetLogger.isOpen())
@@ -151,7 +146,6 @@ int main()
         return 1;
     }
 
-    // initializing socket
     if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0)
     {
         ui.operatorState = "STARTUP_ERROR";
@@ -161,7 +155,6 @@ int main()
         return 1;
     }
 
-    // creating socket and binding
     listenSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (listenSocket == INVALID_SOCKET)
     {
@@ -205,9 +198,8 @@ int main()
     drawServerDashboard(ui);
 
     cout << "current server state is STATE_DISCONNECTED" << endl;
-    cout << "waiting for aircraft on port 5000" << endl;
+    cout << "waiting for aircraft on port " << kServerPort << endl;
 
-    // listen for 1 at a time as of now
     clientSocket = accept(listenSocket, NULL, NULL);
 
     if (clientSocket != INVALID_SOCKET)
@@ -220,6 +212,7 @@ int main()
 
         PacketHeader handshakeRequest = {};
         unique_ptr<uint8_t[]> handshakePayload;
+
         if (!receivePacket(clientSocket, handshakeRequest, handshakePayload))
         {
             ui.connectionStatus = "NO CLIENT";
@@ -239,10 +232,15 @@ int main()
         else
         {
             packetLogger.logPacket("RX",
-                                   packetTypeToString(handshakeRequest.packet_type),
-                                   handshakeRequest.aircraft_id,
-                                   handshakeRequest.sequence_number,
-                                   handshakeRequest.payload_size);
+                packetTypeToString(handshakeRequest.packet_type),
+                handshakeRequest.aircraft_id,
+                handshakeRequest.sequence_number,
+                handshakeRequest.payload_size);
+
+            applyHeaderToDashboard(ui, handshakeRequest);
+            ui.selectedAircraft = "AC-" + to_string(handshakeRequest.aircraft_id);
+            ui.lastEvent = "Handshake request received";
+            drawServerDashboard(ui);
 
             PacketHeader handshakeAck = {};
             handshakeAck.packet_type = PacketType::HandshakeAck;
@@ -261,29 +259,88 @@ int main()
             else
             {
                 packetLogger.logPacket("TX",
-                                       packetTypeToString(handshakeAck.packet_type),
-                                       handshakeAck.aircraft_id,
-                                       handshakeAck.sequence_number,
-                                       handshakeAck.payload_size);
+                    packetTypeToString(handshakeAck.packet_type),
+                    handshakeAck.aircraft_id,
+                    handshakeAck.sequence_number,
+                    handshakeAck.payload_size);
+
+                applyHeaderToDashboard(ui, handshakeAck);
 
                 currentState = STATE_CONNECTED;
                 ui.operatorState = "CONNECTED";
-                ui.selectedAircraft = "AC-101";
+                ui.selectedAircraft = "AC-" + to_string(handshakeAck.aircraft_id);
                 ui.lastEvent = "Handshake ACK sent";
                 drawServerDashboard(ui);
+
                 cout << "Handshake completed on port " << kServerPort << endl;
+
+                bool running = true;
+                while (running)
+                {
+                    refreshTelemetryAlert(ui, telemetryMonitor);
+                    drawServerDashboard(ui);
+
+                    int choice = -1;
+                    cin >> choice;
+
+                    if (cin.fail())
+                    {
+                        cin.clear();
+                        cin.ignore(10000, '\n');
+                        continue;
+                    }
+
+                    cin.ignore(10000, '\n');
+
+                    switch (choice)
+                    {
+                    case 1:
+                        ui.lastEvent = "Server already running";
+                        break;
+
+                    case 2:
+                        ui.lastEvent = "Client already connected";
+                        break;
+
+                    case 3:
+                        ui.lastEvent = "Handshake already completed";
+                        break;
+
+                    case 4:
+                        simulateTelemetryUpdate(ui, telemetryMonitor);
+                        currentState = STATE_TELEMETRY;
+                        break;
+
+                    case 5:
+                        ui.lastEvent = "Weather map dispatch placeholder";
+                        currentState = STATE_LARGE_FILE_TRANSFER;
+                        break;
+
+                    case 0:
+                        running = false;
+                        break;
+
+                    default:
+                        ui.lastEvent = "Invalid menu option";
+                        break;
+                    }
+                }
             }
         }
 
         handshakePayload.reset();
     }
 
-    // Cleanup
     if (clientSocket != INVALID_SOCKET)
     {
         closesocket(clientSocket);
     }
-    closesocket(listenSocket);
+
+    if (listenSocket != INVALID_SOCKET)
+    {
+        closesocket(listenSocket);
+    }
+
     WSACleanup();
 
     ui.serverStatus = "OFFLINE";
