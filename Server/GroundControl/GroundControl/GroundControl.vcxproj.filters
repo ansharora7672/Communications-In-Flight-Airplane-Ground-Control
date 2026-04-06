@@ -41,5 +41,8 @@
     <ClInclude Include="ServerDashboard.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="CommandGate.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>
