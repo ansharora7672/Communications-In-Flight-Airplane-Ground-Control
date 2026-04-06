@@ -11,6 +11,7 @@
 #include "TelemetryPayload.h"
 #include "ServerDashboard.h"
 #include "ServerDashboardHelpers.h"
+#include "CommandGate.h"
 
 #pragma comment(lib, "ws2_32.lib")
 
@@ -120,6 +121,23 @@ void drawServerDashboard(const ServerDashboard& s)
     cout << "0. Exit\n";
 
     printDivider();
+}
+
+bool tryDispatchCommand(ServerState& currentState, ServerDashboard& ui)
+{
+    if (!canDispatchCommand(currentState))
+    {
+        const std::string reason = commandGateReason(currentState);
+        currentState = STATE_FAULT;
+        ui.connectionStatus = "FAULT";
+        ui.operatorState = "FAULT";
+        ui.telemetryAlert = "FAULT";
+        ui.lastEvent = reason;
+        return false;
+    }
+
+    ui.lastEvent = "Command packet dispatched";
+    return true;
 }
 
 int main()
@@ -312,8 +330,12 @@ int main()
                         break;
 
                     case 5:
-                        ui.lastEvent = "Weather map dispatch placeholder";
-                        currentState = STATE_LARGE_FILE_TRANSFER;
+                        if (tryDispatchCommand(currentState, ui))
+                        {
+                            ui.lastEvent = "Weather map dispatch placeholder";
+                            currentState = STATE_LARGE_FILE_TRANSFER;
+                            ui.operatorState = "LARGE_FILE_TRANSFER";
+                        }
                         break;
 
                     case 0:
