@@ -35,5 +35,11 @@
     <ClInclude Include="TelemetryPayload.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="ServerDashboardHelpers.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="ServerDashboard.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>
