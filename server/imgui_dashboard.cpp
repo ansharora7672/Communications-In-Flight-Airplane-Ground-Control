@@ -48,6 +48,33 @@ AircraftDashboardState* selectedAircraft(DashboardState& state) {
     return nullptr;
 }
 
+void selectRelativeAircraft(DashboardState& state, int direction) {
+    if (state.aircraft.empty()) {
+        state.selectedAircraftId.clear();
+        return;
+    }
+
+    auto selected = state.aircraft.find(state.selectedAircraftId);
+    if (selected == state.aircraft.end()) {
+        state.selectedAircraftId = state.aircraft.begin()->first;
+        return;
+    }
+
+    if (direction > 0) {
+        ++selected;
+        if (selected == state.aircraft.end()) {
+            selected = state.aircraft.begin();
+        }
+    } else {
+        if (selected == state.aircraft.begin()) {
+            selected = state.aircraft.end();
+        }
+        --selected;
+    }
+
+    state.selectedAircraftId = selected->first;
+}
+
 } // namespace
 
 ImVec4 stateColor(StateMachine::State state) {
@@ -81,6 +108,17 @@ void renderDashboard(DashboardState& state) {
     ImGui::TextUnformatted("TRACKED AIRCRAFT");
     ImGui::Separator();
     ImGui::Text("Known Aircraft: %d", static_cast<int>(state.aircraft.size()));
+    ImGui::BeginDisabled(state.aircraft.empty());
+    if (ImGui::Button("Previous Flight", ImVec2(140.0f, 0.0f))) {
+        selectRelativeAircraft(state, -1);
+        selected = selectedAircraft(state);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Next Flight", ImVec2(-1.0f, 0.0f))) {
+        selectRelativeAircraft(state, 1);
+        selected = selectedAircraft(state);
+    }
+    ImGui::EndDisabled();
     ImGui::Spacing();
 
     for (auto& [aircraftId, aircraft] : state.aircraft) {
@@ -112,6 +150,7 @@ void renderDashboard(DashboardState& state) {
     if (selected == nullptr) {
         ImGui::TextUnformatted("No aircraft connected yet.");
     } else {
+        ImGui::Text("Viewing %s", selected->aircraftId.c_str());
         renderTelemetryValue("Aircraft ID", selected->aircraftId.c_str());
         ImGui::Text("State:");
         ImGui::SameLine();

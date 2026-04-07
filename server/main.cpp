@@ -38,7 +38,7 @@ namespace {
 
 constexpr std::uint16_t kDefaultPort = 5000;
 constexpr std::size_t kChunkSize = 4096;
-const std::string kWeatherMapPath = "runtime/bitmaps/generated/weather_map.bmp";
+const std::string kGeneratedWeatherMapDirectory = "runtime/bitmaps/generated";
 const std::string kImguiIniPath = "runtime/ui/imgui.ini";
 
 struct SharedServerState {
@@ -143,7 +143,24 @@ bool sendPacket(SocketHandle socketHandle, const PacketHeader& header, const std
     return true;
 }
 
-void generateWeatherMap(const std::string& path) {
+std::string generatedWeatherMapPathFor(const std::string& aircraftId) {
+    return kGeneratedWeatherMapDirectory + "/" + aircraftId + "_weather_map.bmp";
+}
+
+std::uint32_t aircraftSeed(const std::string& aircraftId) {
+    std::uint32_t seed = 2166136261u;
+    for (unsigned char ch : aircraftId) {
+        seed ^= ch;
+        seed *= 16777619u;
+    }
+    return seed;
+}
+
+std::uint8_t clampChannel(int value) {
+    return static_cast<std::uint8_t>(std::clamp(value, 0, 255));
+}
+
+void generateWeatherMap(const std::string& path, const ClientSession& session) {
     std::filesystem::create_directories(std::filesystem::path(path).parent_path());
 
     constexpr int width = 1024;
@@ -173,13 +190,61 @@ void generateWeatherMap(const std::string& path) {
     std::ofstream out(path, std::ios::binary);
     out.write(reinterpret_cast<const char*>(header.data()), static_cast<std::streamsize>(header.size()));
 
+    const std::uint32_t seed = aircraftSeed(session.aircraftId);
+    int stormCenterX = static_cast<int>(seed % width);
+    int stormCenterY = static_cast<int>((seed >> 12) % height);
+    int stormRadius = 160 + static_cast<int>(seed % 120);
+    int frontOffset = static_cast<int>((seed >> 20) % 220);
+    int altitudeBand = 180 + static_cast<int>((seed >> 8) % 320);
+
+    if (session.telemetryValid) {
+        stormCenterX = std::clamp(
+            static_cast<int>(((session.telemetry.longitude + 180.0f) / 360.0f) * static_cast<float>(width - 1)),
+            0,
+            width - 1);
+        stormCenterY = std::clamp(
+            height - 1 -
+                static_cast<int>(((session.telemetry.latitude + 90.0f) / 180.0f) * static_cast<float>(height - 1)),
+            0,
+            height - 1);
+        stormRadius = std::clamp(150 + static_cast<int>(session.telemetry.speed * 0.25f), 150, 320);
+        frontOffset = static_cast<int>(session.telemetry.heading) % 220;
+        altitudeBand = std::clamp(static_cast<int>(session.telemetry.altitude / 120.0f), 120, height - 1);
+    }
+
+    const int stormFalloff = std::max(1, (stormRadius * stormRadius) / 255);
     std::vector<std::uint8_t> row(static_cast<std::size_t>(width) * bytesPerPixel);
     for (int y = height - 1; y >= 0; --y) {
         for (int x = 0; x < width; ++x) {
             const std::size_t offset = static_cast<std::size_t>(x) * bytesPerPixel;
-            row[offset + 0] = static_cast<std::uint8_t>((x * 255) / width);
-            row[offset + 1] = static_cast<std::uint8_t>((y * 255) / height);
-            row[offset + 2] = 0;
+
+            const int dx = x - stormCenterX;
+            const int dy = y - stormCenterY;
+            const int stormIntensity = std::max(0, 255 - ((dx * dx + dy * dy) / stormFalloff));
+            const int frontBand =
+                std::max(0, 120 - std::abs((((x + y) + frontOffset) % 240) - 120));
+            const int altitudeStripe =
+                std::max(0, 90 - std::abs((((y * 2) + altitudeBand) % 180) - 90));
+            const int turbulence =
+                std::max(0, 75 - std::abs((((x ^ y) + static_cast<int>(seed & 0xFFu)) % 150) - 75));
+
+            const int blueBase = 85 + ((x * 70) / width) + static_cast<int>((seed >> 16) & 0x1F);
+            const int greenBase = 55 + ((y * 65) / height) + static_cast<int>((seed >> 8) & 0x1F);
+            const int redBase = 20 + (((x + y) * 30) / (width + height)) + static_cast<int>(seed & 0x1F);
+
+            int blue = blueBase + (stormIntensity / 2) + (frontBand / 5);
+            int green = greenBase + (stormIntensity / 4) + (altitudeStripe / 3);
+            int red = redBase + (stormIntensity / 7) + (frontBand / 3) + (turbulence / 4);
+
+            if (stormIntensity > 205 && ((x + y + static_cast<int>(seed)) % 97) == 0) {
+                red = 250;
+                green = 245;
+                blue = 220;
+            }
+
+            row[offset + 0] = clampChannel(blue);
+            row[offset + 1] = clampChannel(green);
+            row[offset + 2] = clampChannel(red);
         }
         out.write(reinterpret_cast<const char*>(row.data()), static_cast<std::streamsize>(row.size()));
     }
@@ -232,7 +297,10 @@ bool sendWeatherMap(ClientSession& session, Logger& logger, SharedServerState& s
     }
     updateDashboardAircraft(sharedState, session);
 
-    std::ifstream file(kWeatherMapPath, std::ios::binary | std::ios::ate);
+    const std::string weatherMapPath = generatedWeatherMapPathFor(session.aircraftId);
+    generateWeatherMap(weatherMapPath, session);
+
+    std::ifstream file(weatherMapPath, std::ios::binary | std::ios::ate);
     if (!file) {
         handleFault(session, logger, sharedState, "WeatherMapMissing");
         return false;
@@ -604,10 +672,6 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     const ServerOptions options = *parsedOptions;
-
-    if (!std::filesystem::exists(kWeatherMapPath)) {
-        generateWeatherMap(kWeatherMapPath);
-    }
 
     initSockets();
     Logger logger("groundctrl");

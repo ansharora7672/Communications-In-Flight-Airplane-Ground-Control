@@ -50,14 +50,14 @@ To simulate multiple aircraft, start one server and then launch multiple clients
 ./build/aircraft_client 127.0.0.1 5050 AC-002
 ```
 
-Each client must use a unique aircraft ID in the format `AC-001`. The server dashboard tracks aircraft independently, and the weather-map and disconnect controls apply to the currently selected aircraft only.
+Each client must use a unique aircraft ID in the format `AC-001`. The server dashboard tracks aircraft independently, and the weather-map and disconnect controls apply to the currently selected aircraft only. The GUI also includes `Previous Flight` and `Next Flight` buttons so you can cycle through connected aircraft without clicking the list manually.
 
 ## Runtime Output Layout
 
 - `runtime/logs/aircraft_comms/`: aircraft client communication logs.
 - `runtime/logs/groundctrl_comms/`: ground server communication logs.
 - `runtime/logs/blackbox/`: server fault-only black box logs.
-- `runtime/bitmaps/generated/`: server-generated weather map BMP.
+- `runtime/bitmaps/generated/`: server-generated weather map BMPs, one per aircraft.
 - `runtime/bitmaps/received/`: client-downloaded weather map BMPs, one per aircraft.
 - `runtime/ui/`: Dear ImGui runtime window-layout state such as `imgui.ini`.
 
@@ -69,3 +69,5 @@ Each client must use a unique aircraft ID in the format `AC-001`. The server das
 - `third_party/imgui/`: bundled Dear ImGui sources and OpenGL/GLFW backends.
 
 Logs are written under `runtime/logs/` with UTC timestamped filenames.
+
+Each weather-map send regenerates that aircraft's BMP in `runtime/bitmaps/generated/`, so different aircraft get distinct generated files such as `AC-001_weather_map.bmp` and `AC-002_weather_map.bmp`.
