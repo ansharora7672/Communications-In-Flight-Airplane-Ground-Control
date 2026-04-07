@@ -49,3 +49,9 @@ This file is updated after implementation commits with timestamps, commit hashes
 - Commit: `5dc8d96`
 - Files changed: `README.md`, `client/main.cpp`, `common/logger.cpp`, `server/imgui_dashboard.cpp`, `server/imgui_dashboard.h`, `server/main.cpp`
 - Summary: Reworked the ground server to track multiple aircraft concurrently, scoped dashboard controls to a selected aircraft, made aircraft IDs configurable on the client, cleaned up intentional client disconnect handling, and separated concurrent client log files and received weather-map files more cleanly.
+
+## 2026-04-07 08:44:22 UTC
+
+- Commit: `1d04d59`
+- Files changed: `README.md`, `server/imgui_dashboard.cpp`, `server/main.cpp`
+- Summary: Changed weather-map generation to create a distinct generated BMP per aircraft based on aircraft identity and telemetry, and added `Previous Flight` and `Next Flight` dashboard controls for cycling between connected aircraft.
