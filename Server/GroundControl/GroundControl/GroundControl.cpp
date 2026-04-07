@@ -4,6 +4,11 @@
 #include <string>
 #include <winsock2.h>
 
+#include <thread>
+#include <mutex>
+#include <atomic>
+#include <chrono>
+#include <cstring>
 #include "../../../Shared/PacketLogger.h"
 #include "../../../Shared/SocketUtils.h"
 #include "PacketHeader.h"
@@ -14,6 +19,8 @@
 #include "CommandGate.h"
 #include "Checksum.h"
 #include "WeatherMapSender.h"
+#include "BlackBoxLogger.h"
+    
 
 #pragma comment(lib, "ws2_32.lib")
 
@@ -176,10 +183,31 @@ int main()
     struct sockaddr_in serverAddr = {};
     PacketLogger packetLogger(kServerLogFile);
 
-    ServerState currentState = STATE_DISCONNECTED;
 
+    ServerState currentState = STATE_DISCONNECTED;
     ServerDashboard ui;
     TelemetryMonitor telemetryMonitor;
+    mutex uiMutex;
+    atomic<bool> telemetryThreadRunning(false);
+    thread telemetryThread;
+
+    BlackBoxLogger blackBoxLogger("blackbox_log.txt");
+    auto enterFault = [&](const std::string& cause) {
+        currentState = STATE_FAULT;
+        ui.connectionStatus = "FAULT";
+        ui.operatorState = "FAULT";
+        ui.telemetryAlert = "FAULT";
+        ui.lastEvent = cause;
+        blackBoxLogger.logFault(cause);
+        if (clientSocket != INVALID_SOCKET) {
+            closesocket(clientSocket);
+            clientSocket = INVALID_SOCKET;
+        }
+    };
+
+    mutex uiMutex;
+    atomic<bool> telemetryThreadRunning(false);
+    thread telemetryThread;
 
     drawServerDashboard(ui);
 
@@ -261,12 +289,9 @@ int main()
 
         if (!receivePacket(clientSocket, handshakeRequest, handshakePayload))
         {
-            ui.connectionStatus = "FAULT";
-            ui.operatorState = "FAULT";
-            ui.telemetryAlert = "FAULT";
-            ui.lastEvent = "Packet receive failed (checksum mismatch or connection issue)";
-            currentState = STATE_FAULT;
+            enterFault("Handshake receive failed (checksum mismatch or connection issue)");
             drawServerDashboard(ui);
+
         }
         else if (handshakeRequest.packet_type != PacketType::HandshakeRequest || handshakeRequest.payload_size != 0)
         {
@@ -297,10 +322,7 @@ int main()
 
             if (!sendPacket(clientSocket, handshakeAck, NULL))
             {
-                ui.connectionStatus = "NO CLIENT";
-                ui.operatorState = "FAULT";
-                ui.lastEvent = "Handshake ACK send failed";
-                currentState = STATE_FAULT;
+                enterFault("Handshake ACK send failed");
                 drawServerDashboard(ui);
             }
             else
@@ -320,6 +342,70 @@ int main()
                 drawServerDashboard(ui);
 
                 cout << "Handshake completed on port " << kServerPort << endl;
+
+                telemetryThreadRunning = true;
+                telemetryThread = thread([&]() {
+                    while (telemetryThreadRunning) {
+                        PacketHeader header = {};
+                        unique_ptr<uint8_t[]> payload;
+
+                        bool ok = receivePacket(clientSocket, header, payload);
+                        if (!ok) {
+                            lock_guard<mutex> lock(uiMutex);
+                            packetLogger.logPacket("RX", "INVALID_OR_CORRUPT", 0, 0, 0);
+                            enterFault("Telemetry receive failed (connection or checksum)");
+                            telemetryThreadRunning = false;
+                            break;
+                        }
+
+                        if (header.packet_type != PacketType::Telemetry) {
+                            lock_guard<mutex> lock(uiMutex);
+                            packetLogger.logPacket("RX",
+                                packetTypeToString(header.packet_type),
+                                header.aircraft_id,
+                                header.sequence_number,
+                                header.payload_size);
+                            enterFault("Unexpected packet type received while in telemetry");
+                            telemetryThreadRunning = false;
+                            break;
+                        }
+
+                        if (header.payload_size != sizeof(TelemetryPayload)) {
+                            lock_guard<mutex> lock(uiMutex);
+                            packetLogger.logPacket("RX",
+                                packetTypeToString(header.packet_type),
+                                header.aircraft_id,
+                                header.sequence_number,
+                                header.payload_size);
+                            enterFault("Malformed telemetry payload size");
+                            telemetryThreadRunning = false;
+                            break;
+                        }
+
+                        TelemetryPayload telemetry = {};
+                        memcpy(&telemetry, payload.get(), sizeof(TelemetryPayload));
+
+                        {
+                            lock_guard<mutex> lock(uiMutex);
+                            packetLogger.logPacket("RX",
+                                packetTypeToString(header.packet_type),
+                                header.aircraft_id,
+                                header.sequence_number,
+                                header.payload_size);
+
+                            applyHeaderToDashboard(ui, header);
+                            applyTelemetryToDashboard(ui, telemetry);
+                            markTelemetryReceived(ui, telemetryMonitor);
+
+                            ui.connectionStatus = "CLIENT CONNECTED";
+                            ui.operatorState = "TELEMETRY";
+                            ui.selectedAircraft = "AC-" + std::to_string(header.aircraft_id);
+                            ui.lastEvent = "Telemetry packet processed";
+
+                            currentState = STATE_TELEMETRY;
+                        }
+                    }
+                });
 
                 bool running = true;
                 while (running)
