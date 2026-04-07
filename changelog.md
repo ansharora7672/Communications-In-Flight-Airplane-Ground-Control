@@ -43,3 +43,9 @@ This file is updated after implementation commits with timestamps, commit hashes
 - Commit: `7ea5165`
 - Files changed: `AGENT_BUILD_SPEC.md`, `README.md`, `server/main.cpp`, `changelog.md`
 - Summary: Removed the old build spec from the repo, normalized the changelog filename to lowercase, moved ImGui runtime settings into `runtime/ui/`, and kept the macOS GLFW startup fix in the server.
+
+## 2026-04-07 08:35:42 UTC
+
+- Commit: `5dc8d96`
+- Files changed: `README.md`, `client/main.cpp`, `common/logger.cpp`, `server/imgui_dashboard.cpp`, `server/imgui_dashboard.h`, `server/main.cpp`
+- Summary: Reworked the ground server to track multiple aircraft concurrently, scoped dashboard controls to a selected aircraft, made aircraft IDs configurable on the client, cleaned up intentional client disconnect handling, and separated concurrent client log files and received weather-map files more cleanly.
