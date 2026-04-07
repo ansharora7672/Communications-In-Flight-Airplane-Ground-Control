@@ -35,6 +35,13 @@ To connect to a custom server port, pass the same port to both programs:
 ./build/aircraft_client 127.0.0.1 5050
 ```
 
+Headless test mode is also available for environments that cannot open a GLFW window. It accepts one client session and then exits:
+
+```bash
+./build/ground_server --headless 5050
+./build/aircraft_client 127.0.0.1 5050
+```
+
 ## Repository Layout
 
 - `common/`: shared packet definitions, socket helpers, and timestamped logging.

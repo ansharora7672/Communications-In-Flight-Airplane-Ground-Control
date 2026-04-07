@@ -12,6 +12,7 @@
 #include <iomanip>
 #include <iostream>
 #include <mutex>
+#include <optional>
 #include <regex>
 #include <sstream>
 #include <string>
@@ -41,6 +42,11 @@ const std::string kWeatherMapPath = "assets/weather_map.bmp";
 struct SharedServerState {
     std::mutex mutex;
     DashboardState dashboard;
+};
+
+struct ServerOptions {
+    std::uint16_t listenPort = kDefaultPort;
+    bool headless = false;
 };
 
 std::string timeStampHmsUtc() {
@@ -264,7 +270,8 @@ void serverThreadMain(
     SocketHandle listenSocket,
     std::atomic<bool>& running,
     Logger& logger,
-    SharedServerState& sharedState) {
+    SharedServerState& sharedState,
+    bool stopAfterSingleSession) {
     StateMachine stateMachine;
     std::uint32_t sequenceCounter = 1;
 
@@ -451,26 +458,47 @@ void serverThreadMain(
         if (!dashboardShowsFault(sharedState)) {
             setDashboardConnection(sharedState, StateMachine::State::DISCONNECTED, false, "N/A");
         }
+
+        if (stopAfterSingleSession) {
+            running.store(false);
+        }
     }
+}
+
+std::optional<ServerOptions> parseServerOptions(int argc, char* argv[]) {
+    ServerOptions options;
+
+    for (int i = 1; i < argc; ++i) {
+        const std::string arg = argv[i];
+        if (arg == "--headless") {
+            options.headless = true;
+            continue;
+        }
+
+        try {
+            const int parsedPort = std::stoi(arg);
+            if (parsedPort < 1 || parsedPort > 65535) {
+                std::cerr << "Invalid port. Please choose a value between 1 and 65535.\n";
+                return std::nullopt;
+            }
+            options.listenPort = static_cast<std::uint16_t>(parsedPort);
+        } catch (const std::exception&) {
+            std::cerr << "Invalid argument. Usage: ./ground_server [port] [--headless]\n";
+            return std::nullopt;
+        }
+    }
+
+    return options;
 }
 
 } // namespace
 
 int main(int argc, char* argv[]) {
-    std::uint16_t listenPort = kDefaultPort;
-    if (argc > 1) {
-        try {
-            const int parsedPort = std::stoi(argv[1]);
-            if (parsedPort < 1 || parsedPort > 65535) {
-                std::cerr << "Invalid port. Please choose a value between 1 and 65535.\n";
-                return 1;
-            }
-            listenPort = static_cast<std::uint16_t>(parsedPort);
-        } catch (const std::exception&) {
-            std::cerr << "Invalid port argument. Usage: ./ground_server [port]\n";
-            return 1;
-        }
+    const std::optional<ServerOptions> parsedOptions = parseServerOptions(argc, argv);
+    if (!parsedOptions.has_value()) {
+        return 1;
     }
+    const ServerOptions options = *parsedOptions;
 
     if (!std::filesystem::exists(kWeatherMapPath)) {
         generateWeatherMap(kWeatherMapPath);
@@ -490,21 +518,43 @@ int main(int argc, char* argv[]) {
 
     sockaddr_in address {};
     address.sin_family = AF_INET;
-    address.sin_port = htons(listenPort);
+    address.sin_port = htons(options.listenPort);
     address.sin_addr.s_addr = htonl(INADDR_ANY);
 
     if (bind(listenSocket, reinterpret_cast<const sockaddr*>(&address), sizeof(address)) == SOCK_ERR) {
-        std::cerr << "Unable to bind server socket on port " << listenPort << ".\n";
+        std::cerr << "Unable to bind server socket on port " << options.listenPort << ".\n";
         closeSocket(listenSocket);
         cleanupSockets();
         return 1;
     }
 
     if (listen(listenSocket, 4) == SOCK_ERR) {
-        std::cerr << "Unable to listen on server socket on port " << listenPort << ".\n";
+        std::cerr << "Unable to listen on server socket on port " << options.listenPort << ".\n";
         closeSocket(listenSocket);
         cleanupSockets();
         return 1;
+    }
+
+    SharedServerState sharedState;
+    std::atomic<bool> running {true};
+
+    if (options.headless) {
+        std::cout << "Ground server running in headless mode on port " << options.listenPort
+                  << " for a single test session.\n";
+        std::thread worker(
+            serverThreadMain,
+            listenSocket,
+            std::ref(running),
+            std::ref(logger),
+            std::ref(sharedState),
+            true);
+        if (worker.joinable()) {
+            worker.join();
+        }
+        shutdownSocket(listenSocket);
+        closeSocket(listenSocket);
+        cleanupSockets();
+        return 0;
     }
 
     if (!glfwInit()) {
@@ -536,9 +586,13 @@ int main(int argc, char* argv[]) {
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init(glslVersion);
 
-    SharedServerState sharedState;
-    std::atomic<bool> running {true};
-    std::thread worker(serverThreadMain, listenSocket, std::ref(running), std::ref(logger), std::ref(sharedState));
+    std::thread worker(
+        serverThreadMain,
+        listenSocket,
+        std::ref(running),
+        std::ref(logger),
+        std::ref(sharedState),
+        false);
 
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
