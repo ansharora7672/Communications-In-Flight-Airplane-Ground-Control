@@ -4,6 +4,11 @@
 #include <string>
 #include <winsock2.h>
 
+#include <thread>
+#include <mutex>
+#include <atomic>
+#include <chrono>
+#include <cstring>
 #include "../../../Shared/PacketLogger.h"
 #include "../../../Shared/SocketUtils.h"
 #include "PacketHeader.h"
@@ -14,6 +19,7 @@
 #include "CommandGate.h"
 #include "Checksum.h"
 #include "WeatherMapSender.h"
+    
 
 #pragma comment(lib, "ws2_32.lib")
 
@@ -180,6 +186,13 @@ int main()
 
     ServerDashboard ui;
     TelemetryMonitor telemetryMonitor;
+    mutex uiMutex;
+    atomic<bool> telemetryThreadRunning(false);
+    thread telemetryThread;
+
+    mutex uiMutex;
+    atomic<bool> telemetryThreadRunning(false);
+    thread telemetryThread;
 
     drawServerDashboard(ui);
 
@@ -320,6 +333,82 @@ int main()
                 drawServerDashboard(ui);
 
                 cout << "Handshake completed on port " << kServerPort << endl;
+
+                telemetryThreadRunning = true;
+                telemetryThread = thread([&]() {
+                    while (telemetryThreadRunning) {
+                        PacketHeader header = {};
+                        unique_ptr<uint8_t[]> payload;
+
+                        bool ok = receivePacket(clientSocket, header, payload);
+                        if (!ok) {
+                            lock_guard<mutex> lock(uiMutex);
+                            currentState = STATE_FAULT;
+                            ui.connectionStatus = "FAULT";
+                            ui.operatorState = "FAULT";
+                            ui.telemetryAlert = "FAULT";
+                            ui.lastEvent = "Telemetry receive failed (connection or checksum)";
+                            packetLogger.logPacket("RX", "INVALID_OR_CORRUPT", 0, 0, 0);
+                            telemetryThreadRunning = false;
+                            break;
+                        }
+
+                        if (header.packet_type != PacketType::Telemetry) {
+                            lock_guard<mutex> lock(uiMutex);
+                            currentState = STATE_FAULT;
+                            ui.connectionStatus = "FAULT";
+                            ui.operatorState = "FAULT";
+                            ui.telemetryAlert = "FAULT";
+                            ui.lastEvent = "Unexpected packet type received while in telemetry";
+                            packetLogger.logPacket("RX",
+                                packetTypeToString(header.packet_type),
+                                header.aircraft_id,
+                                header.sequence_number,
+                                header.payload_size);
+                            telemetryThreadRunning = false;
+                            break;
+                        }
+
+                        if (header.payload_size != sizeof(TelemetryPayload)) {
+                            lock_guard<mutex> lock(uiMutex);
+                            currentState = STATE_FAULT;
+                            ui.connectionStatus = "FAULT";
+                            ui.operatorState = "FAULT";
+                            ui.telemetryAlert = "FAULT";
+                            ui.lastEvent = "Malformed telemetry payload size";
+                            packetLogger.logPacket("RX",
+                                packetTypeToString(header.packet_type),
+                                header.aircraft_id,
+                                header.sequence_number,
+                                header.payload_size);
+                            telemetryThreadRunning = false;
+                            break;
+                        }
+
+                        TelemetryPayload telemetry = {};
+                        memcpy(&telemetry, payload.get(), sizeof(TelemetryPayload));
+
+                        {
+                            lock_guard<mutex> lock(uiMutex);
+                            packetLogger.logPacket("RX",
+                                packetTypeToString(header.packet_type),
+                                header.aircraft_id,
+                                header.sequence_number,
+                                header.payload_size);
+
+                            applyHeaderToDashboard(ui, header);
+                            applyTelemetryToDashboard(ui, telemetry);
+                            markTelemetryReceived(ui, telemetryMonitor);
+
+                            ui.connectionStatus = "CLIENT CONNECTED";
+                            ui.operatorState = "TELEMETRY";
+                            ui.selectedAircraft = "AC-" + std::to_string(header.aircraft_id);
+                            ui.lastEvent = "Telemetry packet processed";
+
+                            currentState = STATE_TELEMETRY;
+                        }
+                    }
+                });
 
                 bool running = true;
                 while (running)
