@@ -28,6 +28,12 @@ Optional client arguments:
 ./build/aircraft_client 127.0.0.1 5000 AC-001
 ```
 
+If you omit the aircraft ID, the client now auto-assigns one and will retry with a different ID if the server rejects it as already in use:
+
+```bash
+./build/aircraft_client 127.0.0.1 5000
+```
+
 To connect to a custom server port, pass the same port to both programs:
 
 ```bash
@@ -57,8 +63,8 @@ Each client must use a unique aircraft ID in the format `AC-001`. The server das
 - `runtime/logs/aircraft_comms/`: aircraft client communication logs.
 - `runtime/logs/groundctrl_comms/`: ground server communication logs.
 - `runtime/logs/blackbox/`: server fault-only black box logs.
-- `runtime/bitmaps/generated/`: server-generated weather map BMPs, one per aircraft.
-- `runtime/bitmaps/received/`: client-downloaded weather map BMPs, one per aircraft.
+- `runtime/bitmaps/generated/`: timestamped server-generated weather map BMPs, one file per send.
+- `runtime/bitmaps/received/`: timestamped client-downloaded weather map BMPs, one file per receive.
 - `runtime/ui/`: Dear ImGui runtime window-layout state such as `imgui.ini`.
 
 ## Repository Layout
@@ -70,4 +76,4 @@ Each client must use a unique aircraft ID in the format `AC-001`. The server das
 
 Logs are written under `runtime/logs/` with UTC timestamped filenames.
 
-Each weather-map send regenerates that aircraft's BMP in `runtime/bitmaps/generated/`, so different aircraft get distinct generated files such as `AC-001_weather_map.bmp` and `AC-002_weather_map.bmp`.
+Each weather-map send writes a new timestamped BMP in `runtime/bitmaps/generated/`, and each receive writes a new timestamped BMP in `runtime/bitmaps/received/`. The filenames include the aircraft ID and transfer sequence so you can trace which generated file matches which received file.

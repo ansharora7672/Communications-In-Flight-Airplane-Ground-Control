@@ -1,5 +1,6 @@
 #include <atomic>
 #include <chrono>
+#include <ctime>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -17,13 +18,18 @@
 #include <thread>
 #include <vector>
 
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
+
 #include "logger.h"
 #include "packet.h"
 #include "socket_utils.h"
 
 namespace {
 
-constexpr const char* kDefaultAircraftId = "AC-001";
 constexpr std::uint16_t kDefaultPort = 5000;
 
 enum class ClientState {
@@ -72,7 +78,8 @@ struct ClientSession {
     ClientState state = ClientState::DISCONNECTED;
     std::string stateMessage;
     std::string host;
-    std::string aircraftId = kDefaultAircraftId;
+    std::string aircraftId;
+    bool aircraftIdExplicit = false;
     std::uint16_t port = kDefaultPort;
     std::uint32_t nextSequence = 1;
 };
@@ -80,7 +87,8 @@ struct ClientSession {
 struct ClientOptions {
     std::string host = "localhost";
     std::uint16_t port = kDefaultPort;
-    std::string aircraftId = kDefaultAircraftId;
+    std::string aircraftId;
+    bool aircraftIdExplicit = false;
 };
 
 bool validateAircraftId(const std::string& aircraftId) {
@@ -88,8 +96,50 @@ bool validateAircraftId(const std::string& aircraftId) {
     return std::regex_match(aircraftId, pattern);
 }
 
-std::string receivedWeatherMapPathFor(const std::string& aircraftId) {
-    return "runtime/bitmaps/received/" + aircraftId + "_weather_map.bmp";
+int processIdValue() {
+#ifdef _WIN32
+    return _getpid();
+#else
+    return static_cast<int>(getpid());
+#endif
+}
+
+std::string fileTimestampUtc() {
+    const auto now = std::chrono::system_clock::now();
+    const auto milliseconds =
+        std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count() % 1000;
+    const std::time_t nowTime = std::chrono::system_clock::to_time_t(now);
+    const std::tm* utcNow = std::gmtime(&nowTime);
+
+    std::ostringstream out;
+    out << std::put_time(utcNow, "%Y%m%d_%H%M%S")
+        << '_'
+        << std::setw(3) << std::setfill('0') << milliseconds;
+    return out.str();
+}
+
+std::string formatSequence(std::uint32_t sequence) {
+    std::ostringstream out;
+    out << "seq" << std::setw(4) << std::setfill('0') << sequence;
+    return out.str();
+}
+
+std::string generateAutoAircraftId(std::uint32_t salt = 0) {
+    const auto ticks = static_cast<std::uint64_t>(
+        std::chrono::high_resolution_clock::now().time_since_epoch().count());
+    std::uint32_t mixed = static_cast<std::uint32_t>(ticks) ^ static_cast<std::uint32_t>(ticks >> 32);
+    mixed ^= static_cast<std::uint32_t>(processIdValue() * 2654435761u);
+    mixed ^= salt * 2246822519u;
+
+    const int aircraftNumber = static_cast<int>((mixed % 999u) + 1u);
+    std::ostringstream out;
+    out << "AC-" << std::setw(3) << std::setfill('0') << aircraftNumber;
+    return out.str();
+}
+
+std::string receivedWeatherMapPathFor(const std::string& aircraftId, std::uint32_t sequenceNumber) {
+    return "runtime/bitmaps/received/" + fileTimestampUtc() + "_" + aircraftId + "_" +
+           formatSequence(sequenceNumber) + "_weather_map.bmp";
 }
 
 std::string stateToString(ClientState state) {
@@ -310,12 +360,13 @@ void receiveLargeFile(ClientSession& session, const PacketHeader& header) {
         return;
     }
 
-    const std::string outputPath = receivedWeatherMapPathFor(session.aircraftId);
+    const std::string outputPath = receivedWeatherMapPathFor(session.aircraftId, header.sequence_number);
     std::filesystem::create_directories(std::filesystem::path(outputPath).parent_path());
     std::ofstream out(outputPath, std::ios::binary);
     out.write(reinterpret_cast<const char*>(payload.data), payload.size);
 
     session.logger.logPacket("RX", header);
+    session.logger.logInfo("Weather map saved: " + outputPath);
     setState(session, ClientState::CONNECTED, "[CONNECTED] Weather map saved: " + outputPath);
 
     std::ostringstream saved;
@@ -371,49 +422,80 @@ void receiverLoop(ClientSession& session) {
 }
 
 bool connectSession(ClientSession& session) {
-    session.socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (session.socket == INVALID_SOCK) {
-        setState(session, ClientState::FAULT, "[FAULT] Unable to create client socket.");
-        return false;
-    }
+    constexpr std::uint32_t kMaxAutoIdAttempts = 8;
+    const std::uint32_t maxAttempts = session.aircraftIdExplicit ? 1u : kMaxAutoIdAttempts;
 
-    setState(session, ClientState::HANDSHAKE_PENDING, "[PENDING] Connecting to ground control...");
-    if (!resolveAndConnect(session.socket, session.host, session.port)) {
-        setState(session, ClientState::FAULT, "[FAULT] Unable to connect to ground control.");
+    for (std::uint32_t attempt = 0; attempt < maxAttempts; ++attempt) {
+        session.nextSequence = 1;
+        session.socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        if (session.socket == INVALID_SOCK) {
+            setState(session, ClientState::FAULT, "[FAULT] Unable to create client socket.");
+            return false;
+        }
+
+        setState(session, ClientState::HANDSHAKE_PENDING, "[PENDING] Connecting to ground control...");
+        if (!resolveAndConnect(session.socket, session.host, session.port)) {
+            setState(session, ClientState::FAULT, "[FAULT] Unable to connect to ground control.");
+            closeSocket(session.socket);
+            session.socket = INVALID_SOCK;
+            return false;
+        }
+
+        PacketHeader handshake =
+            makeHeader(PacketType::HANDSHAKE_REQUEST, session.aircraftId, session.nextSequence++, 0, 0);
+        if (!sendPacketLocked(session, handshake, nullptr)) {
+            setState(session, ClientState::FAULT, "[FAULT] Failed to send handshake request.");
+            closeSocket(session.socket);
+            session.socket = INVALID_SOCK;
+            return false;
+        }
+        session.logger.logPacket("TX", handshake);
+
+        PacketHeader response {};
+        if (!recvAll(session.socket, &response, sizeof(response))) {
+            setState(session, ClientState::FAULT, "[FAULT] No handshake response received.");
+            closeSocket(session.socket);
+            session.socket = INVALID_SOCK;
+            return false;
+        }
+        session.logger.logPacket("RX", response);
+
+        if (response.packet_type == PacketType::HANDSHAKE_ACK) {
+            setState(session, ClientState::CONNECTED, "[CONNECTED] Handshake verified. Channel secure.");
+            session.running.store(true);
+            return true;
+        }
+
         closeSocket(session.socket);
         session.socket = INVALID_SOCK;
+
+        if (response.packet_type == PacketType::HANDSHAKE_FAIL && !session.aircraftIdExplicit &&
+            attempt + 1 < maxAttempts) {
+            const std::string previousAircraftId = session.aircraftId;
+            session.aircraftId = generateAutoAircraftId(attempt + 1);
+            printLine(
+                session,
+                "[INFO] Auto-assigned aircraft ID " + previousAircraftId +
+                    " was already in use. Retrying as " + session.aircraftId + '.');
+            continue;
+        }
+
+        if (response.packet_type == PacketType::HANDSHAKE_FAIL) {
+            setState(
+                session,
+                ClientState::DISCONNECTED,
+                "[FAULT] Handshake rejected by server. Aircraft ID may already be in use.");
+        } else {
+            setState(session, ClientState::DISCONNECTED, "[FAULT] Unexpected handshake response from server.");
+        }
         return false;
     }
 
-    PacketHeader handshake =
-        makeHeader(PacketType::HANDSHAKE_REQUEST, session.aircraftId, session.nextSequence++, 0, 0);
-    if (!sendPacketLocked(session, handshake, nullptr)) {
-        setState(session, ClientState::FAULT, "[FAULT] Failed to send handshake request.");
-        closeSocket(session.socket);
-        session.socket = INVALID_SOCK;
-        return false;
-    }
-    session.logger.logPacket("TX", handshake);
-
-    PacketHeader response {};
-    if (!recvAll(session.socket, &response, sizeof(response))) {
-        setState(session, ClientState::FAULT, "[FAULT] No handshake response received.");
-        closeSocket(session.socket);
-        session.socket = INVALID_SOCK;
-        return false;
-    }
-    session.logger.logPacket("RX", response);
-
-    if (response.packet_type != PacketType::HANDSHAKE_ACK) {
-        setState(session, ClientState::DISCONNECTED, "[FAULT] Handshake rejected by server.");
-        closeSocket(session.socket);
-        session.socket = INVALID_SOCK;
-        return false;
-    }
-
-    setState(session, ClientState::CONNECTED, "[CONNECTED] Handshake verified. Channel secure.");
-    session.running.store(true);
-    return true;
+    setState(
+        session,
+        ClientState::DISCONNECTED,
+        "[FAULT] Unable to claim a unique aircraft ID automatically. Try passing one explicitly.");
+    return false;
 }
 
 void disconnectSession(ClientSession& session) {
@@ -462,6 +544,7 @@ std::string normalizeChoice(std::string value) {
 
 std::optional<ClientOptions> parseClientOptions(int argc, char* argv[]) {
     ClientOptions options;
+    options.aircraftId = generateAutoAircraftId();
 
     if (argc > 1) {
         options.host = argv[1];
@@ -483,6 +566,7 @@ std::optional<ClientOptions> parseClientOptions(int argc, char* argv[]) {
 
     if (argc > 3) {
         options.aircraftId = argv[3];
+        options.aircraftIdExplicit = true;
     }
 
     if (argc > 4) {
@@ -512,12 +596,16 @@ int main(int argc, char* argv[]) {
     session.host = parsedOptions->host;
     session.port = parsedOptions->port;
     session.aircraftId = parsedOptions->aircraftId;
+    session.aircraftIdExplicit = parsedOptions->aircraftIdExplicit;
 
     {
         std::lock_guard<std::mutex> lock(session.consoleMutex);
         std::cout << "====================================\n";
         std::cout << "  AIRCRAFT CLIENT - " << session.aircraftId << '\n';
         std::cout << "====================================\n";
+        if (!session.aircraftIdExplicit) {
+            std::cout << "  Auto-assigned aircraft ID\n";
+        }
     }
 
     InputBuffer inputBuffer;

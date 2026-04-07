@@ -72,6 +72,26 @@ std::string timeStampHmsUtc() {
     return out.str();
 }
 
+std::string fileTimestampUtc() {
+    const auto now = std::chrono::system_clock::now();
+    const auto milliseconds =
+        std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count() % 1000;
+    const std::time_t nowTime = std::chrono::system_clock::to_time_t(now);
+    const std::tm* utcNow = std::gmtime(&nowTime);
+
+    std::ostringstream out;
+    out << std::put_time(utcNow, "%Y%m%d_%H%M%S")
+        << '_'
+        << std::setw(3) << std::setfill('0') << milliseconds;
+    return out.str();
+}
+
+std::string formatSequence(std::uint32_t sequence) {
+    std::ostringstream out;
+    out << "seq" << std::setw(4) << std::setfill('0') << sequence;
+    return out.str();
+}
+
 void appendDashboardLog(SharedServerState& sharedState, const std::string& entry) {
     std::lock_guard<std::mutex> lock(sharedState.mutex);
     sharedState.dashboard.recentLogEntries.push_front(entry);
@@ -143,8 +163,9 @@ bool sendPacket(SocketHandle socketHandle, const PacketHeader& header, const std
     return true;
 }
 
-std::string generatedWeatherMapPathFor(const std::string& aircraftId) {
-    return kGeneratedWeatherMapDirectory + "/" + aircraftId + "_weather_map.bmp";
+std::string generatedWeatherMapPathFor(const std::string& aircraftId, std::uint32_t transferSequence) {
+    return kGeneratedWeatherMapDirectory + "/" + fileTimestampUtc() + "_" + aircraftId + "_" +
+           formatSequence(transferSequence) + "_weather_map.bmp";
 }
 
 std::uint32_t aircraftSeed(const std::string& aircraftId) {
@@ -160,7 +181,7 @@ std::uint8_t clampChannel(int value) {
     return static_cast<std::uint8_t>(std::clamp(value, 0, 255));
 }
 
-void generateWeatherMap(const std::string& path, const ClientSession& session) {
+void generateWeatherMap(const std::string& path, const ClientSession& session, std::uint32_t transferSequence) {
     std::filesystem::create_directories(std::filesystem::path(path).parent_path());
 
     constexpr int width = 1024;
@@ -190,7 +211,7 @@ void generateWeatherMap(const std::string& path, const ClientSession& session) {
     std::ofstream out(path, std::ios::binary);
     out.write(reinterpret_cast<const char*>(header.data()), static_cast<std::streamsize>(header.size()));
 
-    const std::uint32_t seed = aircraftSeed(session.aircraftId);
+    const std::uint32_t seed = aircraftSeed(session.aircraftId) ^ (transferSequence * 2246822519u);
     int stormCenterX = static_cast<int>(seed % width);
     int stormCenterY = static_cast<int>((seed >> 12) % height);
     int stormRadius = 160 + static_cast<int>(seed % 120);
@@ -297,8 +318,9 @@ bool sendWeatherMap(ClientSession& session, Logger& logger, SharedServerState& s
     }
     updateDashboardAircraft(sharedState, session);
 
-    const std::string weatherMapPath = generatedWeatherMapPathFor(session.aircraftId);
-    generateWeatherMap(weatherMapPath, session);
+    const std::uint32_t transferSequence = session.serverSequence;
+    const std::string weatherMapPath = generatedWeatherMapPathFor(session.aircraftId, transferSequence);
+    generateWeatherMap(weatherMapPath, session, transferSequence);
 
     std::ifstream file(weatherMapPath, std::ios::binary | std::ios::ate);
     if (!file) {
@@ -320,9 +342,10 @@ bool sendWeatherMap(ClientSession& session, Logger& logger, SharedServerState& s
     PacketHeader header = makeHeader(
         PacketType::LARGE_FILE,
         session.aircraftId,
-        session.serverSequence++,
+        transferSequence,
         payload.size,
         computeChecksum(payload.data, payload.size));
+    ++session.serverSequence;
 
     if (!sendAll(session.socket, &header, sizeof(header))) {
         handleFault(session, logger, sharedState, "FileHeaderSendFailure");
@@ -339,7 +362,12 @@ bool sendWeatherMap(ClientSession& session, Logger& logger, SharedServerState& s
     }
 
     logger.logPacket("TX", header);
+    logger.logInfo("Generated weather map: " + weatherMapPath);
     appendDashboardLog(sharedState, compactPacketLog("TX", header));
+    appendDashboardLog(
+        sharedState,
+        "[" + timeStampHmsUtc() + "] MAP " + session.aircraftId + " " +
+            std::filesystem::path(weatherMapPath).filename().string());
     session.stateMachine.transition(StateMachine::State::CONNECTED);
     updateDashboardAircraft(sharedState, session);
     return true;
