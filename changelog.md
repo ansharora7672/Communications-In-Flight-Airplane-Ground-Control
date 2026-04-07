@@ -55,3 +55,9 @@ This file is updated after implementation commits with timestamps, commit hashes
 - Commit: `1d04d59`
 - Files changed: `README.md`, `server/imgui_dashboard.cpp`, `server/main.cpp`
 - Summary: Changed weather-map generation to create a distinct generated BMP per aircraft based on aircraft identity and telemetry, and added `Previous Flight` and `Next Flight` dashboard controls for cycling between connected aircraft.
+
+## 2026-04-07 08:54:30 UTC
+
+- Commit: `9aaa9fd`
+- Files changed: `README.md`, `client/main.cpp`, `server/main.cpp`
+- Summary: Replaced the fixed default aircraft ID with automatic ID assignment and collision retry logic for clients launched without an explicit ID, and changed weather-map generation/receipt to create timestamped per-transfer BMP files so repeated sends remain traceable.
