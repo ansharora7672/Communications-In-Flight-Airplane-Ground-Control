@@ -1,5 +1,4 @@
 build/
 cmake-build-*/
-*.log
-received_weather_map.bmp
-assets/weather_map.bmp
+runtime/
+.DS_Store

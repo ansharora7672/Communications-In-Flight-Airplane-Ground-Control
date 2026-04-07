@@ -37,7 +37,7 @@ namespace {
 
 constexpr std::uint16_t kDefaultPort = 5000;
 constexpr std::size_t kChunkSize = 4096;
-const std::string kWeatherMapPath = "assets/weather_map.bmp";
+const std::string kWeatherMapPath = "runtime/bitmaps/generated/weather_map.bmp";
 
 struct SharedServerState {
     std::mutex mutex;

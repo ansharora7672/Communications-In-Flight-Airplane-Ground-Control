@@ -1,10 +1,13 @@
 #include "logger.h"
 
 #include <ctime>
+#include <filesystem>
 #include <iomanip>
 #include <sstream>
 
 namespace {
+
+const std::filesystem::path kLogsRoot = "runtime/logs";
 
 std::string makeTimestampPrefix() {
     const std::time_t now = std::time(nullptr);
@@ -23,13 +26,24 @@ std::string makeBlackBoxLogName(const std::string& prefix) {
     return prefix + "_blackbox.log";
 }
 
+std::filesystem::path logDirectoryForRole(const std::string& role) {
+    if (role == "aircraft") {
+        return kLogsRoot / "aircraft_comms";
+    }
+    return kLogsRoot / "groundctrl_comms";
+}
+
 } // namespace
 
 Logger::Logger(const std::string& role) {
     const std::string prefix = makeTimestampPrefix();
-    commsLog.open(makeCommsLogName(role, prefix), std::ios::out);
+    const std::filesystem::path commsDirectory = logDirectoryForRole(role);
+    std::filesystem::create_directories(commsDirectory);
+    commsLog.open((commsDirectory / makeCommsLogName(role, prefix)).string(), std::ios::out);
     if (role == "groundctrl") {
-        blackBoxLog.open(makeBlackBoxLogName(prefix), std::ios::out);
+        const std::filesystem::path blackboxDirectory = kLogsRoot / "blackbox";
+        std::filesystem::create_directories(blackboxDirectory);
+        blackBoxLog.open((blackboxDirectory / makeBlackBoxLogName(prefix)).string(), std::ios::out);
     }
 }
 

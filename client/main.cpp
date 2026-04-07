@@ -23,6 +23,7 @@ namespace {
 
 constexpr const char* kAircraftId = "AC-001";
 constexpr std::uint16_t kDefaultPort = 5000;
+const std::string kReceivedWeatherMapPath = "runtime/bitmaps/received/received_weather_map.bmp";
 
 enum class ClientState {
     DISCONNECTED,
@@ -288,14 +289,15 @@ void receiveLargeFile(ClientSession& session, const PacketHeader& header) {
         return;
     }
 
-    std::ofstream out("received_weather_map.bmp", std::ios::binary);
+    std::filesystem::create_directories(std::filesystem::path(kReceivedWeatherMapPath).parent_path());
+    std::ofstream out(kReceivedWeatherMapPath, std::ios::binary);
     out.write(reinterpret_cast<const char*>(payload.data), payload.size);
 
     session.logger.logPacket("RX", header);
-    setState(session, ClientState::CONNECTED, "[CONNECTED] Weather map saved: received_weather_map.bmp");
+    setState(session, ClientState::CONNECTED, "[CONNECTED] Weather map saved: " + kReceivedWeatherMapPath);
 
     std::ostringstream saved;
-    saved << "[RX] Weather map saved: received_weather_map.bmp ("
+    saved << "[RX] Weather map saved: " << kReceivedWeatherMapPath << " ("
           << std::fixed << std::setprecision(1)
           << (static_cast<double>(payload.size) / (1024.0 * 1024.0))
           << " MB)";

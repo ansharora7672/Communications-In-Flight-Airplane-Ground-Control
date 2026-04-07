@@ -42,6 +42,14 @@ Headless test mode is also available for environments that cannot open a GLFW wi
 ./build/aircraft_client 127.0.0.1 5050
 ```
 
+## Runtime Output Layout
+
+- `runtime/logs/aircraft_comms/`: aircraft client communication logs.
+- `runtime/logs/groundctrl_comms/`: ground server communication logs.
+- `runtime/logs/blackbox/`: server fault-only black box logs.
+- `runtime/bitmaps/generated/`: server-generated weather map BMP.
+- `runtime/bitmaps/received/`: client-downloaded weather map BMP.
+
 ## Repository Layout
 
 - `common/`: shared packet definitions, socket helpers, and timestamped logging.
