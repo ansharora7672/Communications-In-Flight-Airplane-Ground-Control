@@ -49,6 +49,7 @@ Headless test mode is also available for environments that cannot open a GLFW wi
 - `runtime/logs/blackbox/`: server fault-only black box logs.
 - `runtime/bitmaps/generated/`: server-generated weather map BMP.
 - `runtime/bitmaps/received/`: client-downloaded weather map BMP.
+- `runtime/ui/`: Dear ImGui runtime window-layout state such as `imgui.ini`.
 
 ## Repository Layout
 

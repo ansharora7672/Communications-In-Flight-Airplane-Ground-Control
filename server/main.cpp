@@ -38,6 +38,7 @@ namespace {
 constexpr std::uint16_t kDefaultPort = 5000;
 constexpr std::size_t kChunkSize = 4096;
 const std::string kWeatherMapPath = "runtime/bitmaps/generated/weather_map.bmp";
+const std::string kImguiIniPath = "runtime/ui/imgui.ini";
 
 struct SharedServerState {
     std::mutex mutex;
@@ -565,8 +566,16 @@ int main(int argc, char* argv[]) {
     }
 
     const char* glslVersion = "#version 130";
+#ifdef __APPLE__
+    glslVersion = "#version 150";
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 2);
+    glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
+    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+#else
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
+#endif
     GLFWwindow* window = glfwCreateWindow(980, 700, "Ground Control - CSCN74000", nullptr, nullptr);
     if (window == nullptr) {
         std::cerr << "Unable to create GLFW window.\n";
@@ -582,6 +591,8 @@ int main(int argc, char* argv[]) {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGui::StyleColorsDark();
+    std::filesystem::create_directories(std::filesystem::path(kImguiIniPath).parent_path());
+    ImGui::GetIO().IniFilename = kImguiIniPath.c_str();
 
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init(glslVersion);
