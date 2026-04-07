@@ -9,7 +9,9 @@
 #include <iomanip>
 #include <iostream>
 #include <mutex>
+#include <optional>
 #include <random>
+#include <regex>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -21,9 +23,8 @@
 
 namespace {
 
-constexpr const char* kAircraftId = "AC-001";
+constexpr const char* kDefaultAircraftId = "AC-001";
 constexpr std::uint16_t kDefaultPort = 5000;
-const std::string kReceivedWeatherMapPath = "runtime/bitmaps/received/received_weather_map.bmp";
 
 enum class ClientState {
     DISCONNECTED,
@@ -71,9 +72,25 @@ struct ClientSession {
     ClientState state = ClientState::DISCONNECTED;
     std::string stateMessage;
     std::string host;
+    std::string aircraftId = kDefaultAircraftId;
     std::uint16_t port = kDefaultPort;
     std::uint32_t nextSequence = 1;
 };
+
+struct ClientOptions {
+    std::string host = "localhost";
+    std::uint16_t port = kDefaultPort;
+    std::string aircraftId = kDefaultAircraftId;
+};
+
+bool validateAircraftId(const std::string& aircraftId) {
+    static const std::regex pattern("^AC-[0-9]{3}$");
+    return std::regex_match(aircraftId, pattern);
+}
+
+std::string receivedWeatherMapPathFor(const std::string& aircraftId) {
+    return "runtime/bitmaps/received/" + aircraftId + "_weather_map.bmp";
+}
 
 std::string stateToString(ClientState state) {
     switch (state) {
@@ -157,7 +174,7 @@ void printStatus(ClientSession& session) {
     std::cout << colorPrefix(state)
               << "Status: " << statusText
               << " | State: " << stateToString(state)
-              << " | Aircraft: " << kAircraftId
+              << " | Aircraft: " << session.aircraftId
               << colorSuffix() << std::endl;
     const std::string message = getStateMessage(session);
     if (!message.empty()) {
@@ -219,7 +236,7 @@ void telemetryLoop(ClientSession& session) {
         const std::uint8_t* payloadBytes = reinterpret_cast<const std::uint8_t*>(&payload);
         PacketHeader header = makeHeader(
             PacketType::TELEMETRY,
-            kAircraftId,
+            session.aircraftId,
             session.nextSequence++,
             sizeof(TelemetryPayload),
             computeChecksum(payloadBytes, sizeof(TelemetryPayload)));
@@ -266,6 +283,10 @@ void receiveLargeFile(ClientSession& session, const PacketHeader& header) {
         const std::uint32_t chunk = std::min<std::uint32_t>(4096, header.payload_size - received);
         const int bytes = recv(session.socket, reinterpret_cast<char*>(payload.data + received), static_cast<int>(chunk), 0);
         if (bytes <= 0) {
+            if (!session.running.load()) {
+                session.fileTransferActive.store(false);
+                return;
+            }
             setState(session, ClientState::FAULT, "[FAULT] Connection lost. Returning to main menu.");
             session.logger.logFault("LargeFileReceiveFailure", stateToString(ClientState::LARGE_FILE_TRANSFER), header.sequence_number);
             session.running.store(false);
@@ -289,15 +310,16 @@ void receiveLargeFile(ClientSession& session, const PacketHeader& header) {
         return;
     }
 
-    std::filesystem::create_directories(std::filesystem::path(kReceivedWeatherMapPath).parent_path());
-    std::ofstream out(kReceivedWeatherMapPath, std::ios::binary);
+    const std::string outputPath = receivedWeatherMapPathFor(session.aircraftId);
+    std::filesystem::create_directories(std::filesystem::path(outputPath).parent_path());
+    std::ofstream out(outputPath, std::ios::binary);
     out.write(reinterpret_cast<const char*>(payload.data), payload.size);
 
     session.logger.logPacket("RX", header);
-    setState(session, ClientState::CONNECTED, "[CONNECTED] Weather map saved: " + kReceivedWeatherMapPath);
+    setState(session, ClientState::CONNECTED, "[CONNECTED] Weather map saved: " + outputPath);
 
     std::ostringstream saved;
-    saved << "[RX] Weather map saved: " << kReceivedWeatherMapPath << " ("
+    saved << "[RX] Weather map saved: " << outputPath << " ("
           << std::fixed << std::setprecision(1)
           << (static_cast<double>(payload.size) / (1024.0 * 1024.0))
           << " MB)";
@@ -314,6 +336,9 @@ void receiverLoop(ClientSession& session) {
 
         PacketHeader header {};
         if (!recvAll(session.socket, &header, sizeof(header))) {
+            if (!session.running.load()) {
+                break;
+            }
             setState(session, ClientState::FAULT, "[FAULT] Connection lost. Returning to main menu.");
             session.logger.logFault("ReceiveFailure", stateToString(getState(session)), 0);
             session.running.store(false);
@@ -360,7 +385,8 @@ bool connectSession(ClientSession& session) {
         return false;
     }
 
-    PacketHeader handshake = makeHeader(PacketType::HANDSHAKE_REQUEST, kAircraftId, session.nextSequence++, 0, 0);
+    PacketHeader handshake =
+        makeHeader(PacketType::HANDSHAKE_REQUEST, session.aircraftId, session.nextSequence++, 0, 0);
     if (!sendPacketLocked(session, handshake, nullptr)) {
         setState(session, ClientState::FAULT, "[FAULT] Failed to send handshake request.");
         closeSocket(session.socket);
@@ -395,10 +421,12 @@ void disconnectSession(ClientSession& session) {
         return;
     }
 
-    PacketHeader disconnectHeader = makeHeader(PacketType::DISCONNECT, kAircraftId, session.nextSequence++, 0, 0);
+    PacketHeader disconnectHeader =
+        makeHeader(PacketType::DISCONNECT, session.aircraftId, session.nextSequence++, 0, 0);
     sendPacketLocked(session, disconnectHeader, nullptr);
     session.logger.logPacket("TX", disconnectHeader);
 
+    setState(session, ClientState::DISCONNECTED, "[INFO] Disconnected from ground control.");
     session.running.store(false);
     shutdownSocket(session.socket);
     closeSocket(session.socket);
@@ -432,19 +460,63 @@ std::string normalizeChoice(std::string value) {
     return value;
 }
 
+std::optional<ClientOptions> parseClientOptions(int argc, char* argv[]) {
+    ClientOptions options;
+
+    if (argc > 1) {
+        options.host = argv[1];
+    }
+
+    if (argc > 2) {
+        try {
+            const int parsedPort = std::stoi(argv[2]);
+            if (parsedPort < 1 || parsedPort > 65535) {
+                std::cerr << "Invalid port. Please choose a value between 1 and 65535.\n";
+                return std::nullopt;
+            }
+            options.port = static_cast<std::uint16_t>(parsedPort);
+        } catch (const std::exception&) {
+            std::cerr << "Invalid client arguments. Usage: ./aircraft_client [host] [port] [aircraft_id]\n";
+            return std::nullopt;
+        }
+    }
+
+    if (argc > 3) {
+        options.aircraftId = argv[3];
+    }
+
+    if (argc > 4) {
+        std::cerr << "Invalid client arguments. Usage: ./aircraft_client [host] [port] [aircraft_id]\n";
+        return std::nullopt;
+    }
+
+    if (!validateAircraftId(options.aircraftId)) {
+        std::cerr << "Invalid aircraft id. Use the format AC-001.\n";
+        return std::nullopt;
+    }
+
+    return options;
+}
+
 } // namespace
 
 int main(int argc, char* argv[]) {
+    const std::optional<ClientOptions> parsedOptions = parseClientOptions(argc, argv);
+    if (!parsedOptions.has_value()) {
+        return 1;
+    }
+
     initSockets();
 
     ClientSession session;
-    session.host = argc > 1 ? argv[1] : "localhost";
-    session.port = argc > 2 ? static_cast<std::uint16_t>(std::stoi(argv[2])) : kDefaultPort;
+    session.host = parsedOptions->host;
+    session.port = parsedOptions->port;
+    session.aircraftId = parsedOptions->aircraftId;
 
     {
         std::lock_guard<std::mutex> lock(session.consoleMutex);
         std::cout << "====================================\n";
-        std::cout << "  AIRCRAFT CLIENT - " << kAircraftId << '\n';
+        std::cout << "  AIRCRAFT CLIENT - " << session.aircraftId << '\n';
         std::cout << "====================================\n";
     }
 
@@ -505,7 +577,8 @@ int main(int argc, char* argv[]) {
 
                     command = normalizeChoice(command);
                     if (command == "W") {
-                        PacketHeader request = makeHeader(PacketType::LARGE_FILE, kAircraftId, session.nextSequence++, 0, 0);
+                        PacketHeader request =
+                            makeHeader(PacketType::LARGE_FILE, session.aircraftId, session.nextSequence++, 0, 0);
                         if (!sendPacketLocked(session, request, nullptr)) {
                             setState(session, ClientState::FAULT, "[FAULT] Unable to request weather map.");
                             session.running.store(false);

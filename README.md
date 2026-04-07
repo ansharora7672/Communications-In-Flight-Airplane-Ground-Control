@@ -25,22 +25,32 @@ Optional server port:
 Optional client arguments:
 
 ```bash
-./build/aircraft_client 127.0.0.1 5000
+./build/aircraft_client 127.0.0.1 5000 AC-001
 ```
 
 To connect to a custom server port, pass the same port to both programs:
 
 ```bash
 ./build/ground_server 5050
-./build/aircraft_client 127.0.0.1 5050
+./build/aircraft_client 127.0.0.1 5050 AC-001
 ```
 
-Headless test mode is also available for environments that cannot open a GLFW window. It accepts one client session and then exits:
+Headless mode is also available for environments that cannot open a GLFW window:
 
 ```bash
 ./build/ground_server --headless 5050
-./build/aircraft_client 127.0.0.1 5050
+./build/aircraft_client 127.0.0.1 5050 AC-001
 ```
+
+To simulate multiple aircraft, start one server and then launch multiple clients with distinct aircraft IDs:
+
+```bash
+./build/ground_server 5050
+./build/aircraft_client 127.0.0.1 5050 AC-001
+./build/aircraft_client 127.0.0.1 5050 AC-002
+```
+
+Each client must use a unique aircraft ID in the format `AC-001`. The server dashboard tracks aircraft independently, and the weather-map and disconnect controls apply to the currently selected aircraft only.
 
 ## Runtime Output Layout
 
@@ -48,15 +58,14 @@ Headless test mode is also available for environments that cannot open a GLFW wi
 - `runtime/logs/groundctrl_comms/`: ground server communication logs.
 - `runtime/logs/blackbox/`: server fault-only black box logs.
 - `runtime/bitmaps/generated/`: server-generated weather map BMP.
-- `runtime/bitmaps/received/`: client-downloaded weather map BMP.
+- `runtime/bitmaps/received/`: client-downloaded weather map BMPs, one per aircraft.
 - `runtime/ui/`: Dear ImGui runtime window-layout state such as `imgui.ini`.
 
 ## Repository Layout
 
 - `common/`: shared packet definitions, socket helpers, and timestamped logging.
 - `client/`: CLI aircraft client with handshake, telemetry, disconnect, and weather-map download flow.
-- `server/`: socket/state-machine loop, weather-map generation, and Dear ImGui dashboard rendering.
+- `server/`: concurrent socket/state-machine loop, weather-map generation, and Dear ImGui dashboard rendering.
 - `third_party/imgui/`: bundled Dear ImGui sources and OpenGL/GLFW backends.
-- `assets/`: generated weather-map bitmap location.
 
-Logs are written to the current working directory with UTC timestamped filenames.
+Logs are written under `runtime/logs/` with UTC timestamped filenames.

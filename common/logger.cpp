@@ -1,20 +1,39 @@
 #include "logger.h"
 
+#include <chrono>
 #include <ctime>
 #include <filesystem>
 #include <iomanip>
 #include <sstream>
+
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
 
 namespace {
 
 const std::filesystem::path kLogsRoot = "runtime/logs";
 
 std::string makeTimestampPrefix() {
-    const std::time_t now = std::time(nullptr);
-    const std::tm* utcNow = std::gmtime(&now);
+    const auto now = std::chrono::system_clock::now();
+    const auto milliseconds =
+        std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count() % 1000;
+    const std::time_t nowTime = std::chrono::system_clock::to_time_t(now);
+#ifdef _WIN32
+    const int processId = _getpid();
+#else
+    const int processId = static_cast<int>(getpid());
+#endif
+
+    const std::tm* utcNow = std::gmtime(&nowTime);
 
     std::ostringstream out;
-    out << std::put_time(utcNow, "%Y%m%d_%H%M%S");
+    out << std::put_time(utcNow, "%Y%m%d_%H%M%S")
+        << '_'
+        << std::setw(3) << std::setfill('0') << milliseconds
+        << "_pid" << processId;
     return out.str();
 }
 

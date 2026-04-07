@@ -11,6 +11,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <regex>
@@ -50,6 +51,19 @@ struct ServerOptions {
     bool headless = false;
 };
 
+struct ClientSession {
+    SocketHandle socket = INVALID_SOCK;
+    std::string aircraftId;
+    StateMachine stateMachine;
+    TelemetryPayload telemetry {};
+    bool telemetryValid = false;
+    std::uint32_t serverSequence = 1;
+    std::uint32_t lastClientSequence = 0;
+    std::chrono::steady_clock::time_point lastPacketTime = std::chrono::steady_clock::now();
+};
+
+using SessionMap = std::map<SocketHandle, ClientSession>;
+
 std::string timeStampHmsUtc() {
     const std::time_t now = std::time(nullptr);
     const std::tm* utcNow = std::gmtime(&now);
@@ -66,43 +80,6 @@ void appendDashboardLog(SharedServerState& sharedState, const std::string& entry
     }
 }
 
-void setDashboardConnection(
-    SharedServerState& sharedState,
-    StateMachine::State state,
-    bool connected,
-    const std::string& aircraftId,
-    const std::string& alertMessage = std::string()) {
-    std::lock_guard<std::mutex> lock(sharedState.mutex);
-    sharedState.dashboard.state = state;
-    sharedState.dashboard.connected = connected;
-    sharedState.dashboard.aircraftId = aircraftId.empty() ? "N/A" : aircraftId;
-    sharedState.dashboard.alertMessage = alertMessage;
-    if (state == StateMachine::State::DISCONNECTED) {
-        sharedState.dashboard.telemetryValid = false;
-    }
-}
-
-void updateTelemetry(SharedServerState& sharedState, const TelemetryPayload& payload) {
-    std::lock_guard<std::mutex> lock(sharedState.mutex);
-    sharedState.dashboard.telemetry = payload;
-    sharedState.dashboard.telemetryValid = true;
-    sharedState.dashboard.state = StateMachine::State::TELEMETRY;
-    sharedState.dashboard.connected = true;
-}
-
-void clearDashboardFlags(SharedServerState& sharedState, bool& sendWeatherMap, bool& disconnectRequested) {
-    std::lock_guard<std::mutex> lock(sharedState.mutex);
-    sendWeatherMap = sharedState.dashboard.requestSendWeather;
-    disconnectRequested = sharedState.dashboard.requestDisconnect;
-    sharedState.dashboard.requestSendWeather = false;
-    sharedState.dashboard.requestDisconnect = false;
-}
-
-bool dashboardShowsFault(SharedServerState& sharedState) {
-    std::lock_guard<std::mutex> lock(sharedState.mutex);
-    return sharedState.dashboard.state == StateMachine::State::FAULT;
-}
-
 std::string compactPacketLog(const std::string& direction, const PacketHeader& header) {
     std::ostringstream line;
     line << "[" << timeStampHmsUtc() << "] "
@@ -111,6 +88,44 @@ std::string compactPacketLog(const std::string& direction, const PacketHeader& h
          << " Seq=" << header.sequence_number
          << ' ' << extractAircraftId(header.aircraft_id);
     return line.str();
+}
+
+void updateDashboardAircraft(
+    SharedServerState& sharedState,
+    const ClientSession& session,
+    const std::string& alertMessage = std::string()) {
+    if (session.aircraftId.empty()) {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(sharedState.mutex);
+    auto& aircraft = sharedState.dashboard.aircraft[session.aircraftId];
+    aircraft.aircraftId = session.aircraftId;
+    aircraft.state = session.stateMachine.getState();
+    aircraft.connected =
+        session.stateMachine.getState() != StateMachine::State::DISCONNECTED &&
+        session.stateMachine.getState() != StateMachine::State::FAULT;
+    aircraft.telemetry = session.telemetry;
+    aircraft.telemetryValid = session.telemetryValid;
+    aircraft.alertMessage = alertMessage;
+
+    if (sharedState.dashboard.selectedAircraftId.empty()) {
+        sharedState.dashboard.selectedAircraftId = session.aircraftId;
+    }
+}
+
+std::string consumeWeatherRequest(SharedServerState& sharedState) {
+    std::lock_guard<std::mutex> lock(sharedState.mutex);
+    std::string aircraftId = sharedState.dashboard.weatherRequestAircraftId;
+    sharedState.dashboard.weatherRequestAircraftId.clear();
+    return aircraftId;
+}
+
+std::string consumeDisconnectRequest(SharedServerState& sharedState) {
+    std::lock_guard<std::mutex> lock(sharedState.mutex);
+    std::string aircraftId = sharedState.dashboard.disconnectRequestAircraftId;
+    sharedState.dashboard.disconnectRequestAircraftId.clear();
+    return aircraftId;
 }
 
 bool validateAircraftId(const std::string& aircraftId) {
@@ -170,29 +185,56 @@ void generateWeatherMap(const std::string& path) {
     }
 }
 
-bool sendWeatherMap(
-    SocketHandle clientSocket,
+bool aircraftIdInUse(const SessionMap& sessions, SocketHandle currentSocket, const std::string& aircraftId) {
+    for (const auto& [socketHandle, session] : sessions) {
+        if (socketHandle == currentSocket) {
+            continue;
+        }
+        if (session.aircraftId == aircraftId && session.stateMachine.getState() != StateMachine::State::DISCONNECTED) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void closeClientSession(ClientSession& session) {
+    shutdownSocket(session.socket);
+    closeSocket(session.socket);
+    session.socket = INVALID_SOCK;
+}
+
+void handleFault(
+    ClientSession& session,
     Logger& logger,
     SharedServerState& sharedState,
-    StateMachine& stateMachine,
-    const std::string& aircraftId,
-    std::uint32_t& sequenceCounter,
-    std::uint32_t lastSequence) {
-    if (stateMachine.getState() == StateMachine::State::TELEMETRY) {
-        stateMachine.transition(StateMachine::State::CONNECTED);
+    const std::string& cause) {
+    const StateMachine::State currentState = session.stateMachine.getState();
+    if (currentState != StateMachine::State::FAULT) {
+        session.stateMachine.transition(StateMachine::State::FAULT);
     }
-    if (!stateMachine.transition(StateMachine::State::LARGE_FILE_TRANSFER)) {
-        logger.logFault("IllegalFileTransferTransition", stateMachine.stateToString(stateMachine.getState()), lastSequence);
+    logger.logFault(cause, session.stateMachine.stateToString(currentState), session.lastClientSequence);
+    appendDashboardLog(
+        sharedState,
+        "[" + timeStampHmsUtc() + "] FAULT " +
+            (session.aircraftId.empty() ? std::string("UNKNOWN") : session.aircraftId + " ") + cause);
+    updateDashboardAircraft(sharedState, session, cause);
+    session.stateMachine.transition(StateMachine::State::DISCONNECTED);
+    updateDashboardAircraft(sharedState, session);
+}
+
+bool sendWeatherMap(ClientSession& session, Logger& logger, SharedServerState& sharedState) {
+    if (session.stateMachine.getState() == StateMachine::State::TELEMETRY) {
+        session.stateMachine.transition(StateMachine::State::CONNECTED);
+    }
+    if (!session.stateMachine.transition(StateMachine::State::LARGE_FILE_TRANSFER)) {
+        handleFault(session, logger, sharedState, "IllegalFileTransferTransition");
         return false;
     }
-
-    setDashboardConnection(sharedState, StateMachine::State::LARGE_FILE_TRANSFER, true, aircraftId);
+    updateDashboardAircraft(sharedState, session);
 
     std::ifstream file(kWeatherMapPath, std::ios::binary | std::ios::ate);
     if (!file) {
-        logger.logFault("WeatherMapMissing", stateMachine.stateToString(stateMachine.getState()), lastSequence);
-        stateMachine.transition(StateMachine::State::FAULT);
-        setDashboardConnection(sharedState, StateMachine::State::FAULT, true, aircraftId, "Weather map missing");
+        handleFault(session, logger, sharedState, "WeatherMapMissing");
         return false;
     }
 
@@ -203,42 +245,35 @@ bool sendWeatherMap(
     payload.data = static_cast<std::uint8_t*>(std::malloc(size));
     payload.size = size;
     if (!payload.data || !file.read(reinterpret_cast<char*>(payload.data), size)) {
-        logger.logFault("WeatherMapReadFailure", stateMachine.stateToString(stateMachine.getState()), lastSequence);
-        stateMachine.transition(StateMachine::State::FAULT);
-        setDashboardConnection(sharedState, StateMachine::State::FAULT, true, aircraftId, "Unable to read weather map");
+        handleFault(session, logger, sharedState, "WeatherMapReadFailure");
         return false;
     }
 
     PacketHeader header = makeHeader(
         PacketType::LARGE_FILE,
-        aircraftId,
-        sequenceCounter++,
+        session.aircraftId,
+        session.serverSequence++,
         payload.size,
         computeChecksum(payload.data, payload.size));
 
-    if (!sendAll(clientSocket, &header, sizeof(header))) {
-        logger.logFault("FileHeaderSendFailure", stateMachine.stateToString(stateMachine.getState()), lastSequence);
-        stateMachine.transition(StateMachine::State::FAULT);
-        setDashboardConnection(sharedState, StateMachine::State::FAULT, true, aircraftId, "File transfer failed");
+    if (!sendAll(session.socket, &header, sizeof(header))) {
+        handleFault(session, logger, sharedState, "FileHeaderSendFailure");
         return false;
     }
 
     for (std::uint32_t offset = 0; offset < payload.size; offset += static_cast<std::uint32_t>(kChunkSize)) {
         const std::uint32_t chunkSize =
             std::min<std::uint32_t>(static_cast<std::uint32_t>(kChunkSize), payload.size - offset);
-        if (!sendAll(clientSocket, payload.data + offset, chunkSize)) {
-            logger.logFault("FileChunkSendFailure", stateMachine.stateToString(stateMachine.getState()), lastSequence);
-            stateMachine.transition(StateMachine::State::FAULT);
-            setDashboardConnection(sharedState, StateMachine::State::FAULT, true, aircraftId, "File transfer interrupted");
+        if (!sendAll(session.socket, payload.data + offset, chunkSize)) {
+            handleFault(session, logger, sharedState, "FileChunkSendFailure");
             return false;
         }
     }
 
     logger.logPacket("TX", header);
     appendDashboardLog(sharedState, compactPacketLog("TX", header));
-
-    stateMachine.transition(StateMachine::State::CONNECTED);
-    setDashboardConnection(sharedState, StateMachine::State::CONNECTED, true, aircraftId);
+    session.stateMachine.transition(StateMachine::State::CONNECTED);
+    updateDashboardAircraft(sharedState, session);
     return true;
 }
 
@@ -250,219 +285,288 @@ bool receivePacketPayload(SocketHandle clientSocket, const PacketHeader& header,
     return recvAll(clientSocket, payload.data(), header.payload_size);
 }
 
-void handleFault(
-    Logger& logger,
-    SharedServerState& sharedState,
-    StateMachine& stateMachine,
-    const std::string& aircraftId,
-    const std::string& cause,
-    std::uint32_t sequenceNumber) {
-    const StateMachine::State currentState = stateMachine.getState();
-    if (currentState != StateMachine::State::FAULT) {
-        stateMachine.transition(StateMachine::State::FAULT);
+SessionMap::iterator findSessionByAircraftId(SessionMap& sessions, const std::string& aircraftId) {
+    for (auto it = sessions.begin(); it != sessions.end(); ++it) {
+        if (it->second.aircraftId == aircraftId) {
+            return it;
+        }
     }
-    logger.logFault(cause, stateMachine.stateToString(currentState), sequenceNumber);
-    setDashboardConnection(sharedState, StateMachine::State::FAULT, !aircraftId.empty(), aircraftId, cause);
-    appendDashboardLog(sharedState, "[" + timeStampHmsUtc() + "] FAULT " + cause);
-    stateMachine.transition(StateMachine::State::DISCONNECTED);
+    return sessions.end();
+}
+
+bool processHandshake(
+    SessionMap& sessions,
+    SessionMap::iterator sessionIt,
+    const PacketHeader& header,
+    Logger& logger,
+    SharedServerState& sharedState) {
+    ClientSession& session = sessionIt->second;
+    const std::string aircraftId = extractAircraftId(header.aircraft_id);
+
+    const bool validRequest =
+        header.packet_type == PacketType::HANDSHAKE_REQUEST &&
+        header.payload_size == 0 &&
+        validateAircraftId(aircraftId) &&
+        !aircraftIdInUse(sessions, session.socket, aircraftId);
+
+    if (!validRequest) {
+        PacketHeader failHeader = makeHeader(PacketType::HANDSHAKE_FAIL, aircraftId, header.sequence_number, 0, 0);
+        sendPacket(session.socket, failHeader, nullptr);
+        logger.logPacket("TX", failHeader);
+        appendDashboardLog(sharedState, compactPacketLog("TX", failHeader));
+        return false;
+    }
+
+    session.aircraftId = aircraftId;
+    session.lastClientSequence = header.sequence_number;
+    session.lastPacketTime = std::chrono::steady_clock::now();
+
+    PacketHeader ackHeader = makeHeader(PacketType::HANDSHAKE_ACK, aircraftId, header.sequence_number, 0, 0);
+    if (!sendPacket(session.socket, ackHeader, nullptr)) {
+        handleFault(session, logger, sharedState, "HandshakeAckSendFailure");
+        return false;
+    }
+
+    logger.logPacket("TX", ackHeader);
+    appendDashboardLog(sharedState, compactPacketLog("TX", ackHeader));
+    session.stateMachine.transition(StateMachine::State::CONNECTED);
+    updateDashboardAircraft(sharedState, session);
+    return true;
+}
+
+bool processReadableSession(
+    SessionMap& sessions,
+    SessionMap::iterator sessionIt,
+    Logger& logger,
+    SharedServerState& sharedState) {
+    ClientSession& session = sessionIt->second;
+
+    PacketHeader header {};
+    if (!recvAll(session.socket, &header, sizeof(header))) {
+        handleFault(
+            session,
+            logger,
+            sharedState,
+            session.stateMachine.getState() == StateMachine::State::HANDSHAKE_PENDING ? "HandshakeReceiveFailure"
+                                                                                      : "ReceiveFailure");
+        return false;
+    }
+
+    logger.logPacket("RX", header);
+    appendDashboardLog(sharedState, compactPacketLog("RX", header));
+
+    if (session.stateMachine.getState() == StateMachine::State::HANDSHAKE_PENDING) {
+        return processHandshake(sessions, sessionIt, header, logger, sharedState);
+    }
+
+    session.lastPacketTime = std::chrono::steady_clock::now();
+    session.lastClientSequence = header.sequence_number;
+
+    std::vector<std::uint8_t> payload;
+    if (!receivePacketPayload(session.socket, header, payload)) {
+        handleFault(session, logger, sharedState, "PayloadReceiveFailure");
+        return false;
+    }
+
+    if (computeChecksum(payload.data(), header.payload_size) != header.checksum) {
+        handleFault(session, logger, sharedState, "ChecksumMismatch");
+        return false;
+    }
+
+    switch (header.packet_type) {
+        case PacketType::TELEMETRY: {
+            if (header.payload_size != sizeof(TelemetryPayload)) {
+                handleFault(session, logger, sharedState, "TelemetrySizeMismatch");
+                return false;
+            }
+            if (session.stateMachine.getState() == StateMachine::State::CONNECTED) {
+                session.stateMachine.transition(StateMachine::State::TELEMETRY);
+            }
+            if (session.stateMachine.getState() != StateMachine::State::TELEMETRY) {
+                handleFault(session, logger, sharedState, "IllegalTelemetryState");
+                return false;
+            }
+            std::memcpy(&session.telemetry, payload.data(), sizeof(session.telemetry));
+            session.telemetryValid = true;
+            updateDashboardAircraft(sharedState, session);
+            return true;
+        }
+        case PacketType::LARGE_FILE:
+            if (header.payload_size != 0) {
+                handleFault(session, logger, sharedState, "LargeFileRequestPayloadUnexpected");
+                return false;
+            }
+            return sendWeatherMap(session, logger, sharedState);
+        case PacketType::DISCONNECT:
+            if (session.stateMachine.getState() == StateMachine::State::TELEMETRY) {
+                session.stateMachine.transition(StateMachine::State::CONNECTED);
+            }
+            session.stateMachine.transition(StateMachine::State::DISCONNECTED);
+            updateDashboardAircraft(sharedState, session);
+            return false;
+        default:
+            handleFault(session, logger, sharedState, "UnexpectedPacketType");
+            return false;
+    }
+}
+
+bool sessionTimedOut(const ClientSession& session, std::chrono::steady_clock::time_point now) {
+    const StateMachine::State state = session.stateMachine.getState();
+    if (state == StateMachine::State::DISCONNECTED || state == StateMachine::State::FAULT) {
+        return false;
+    }
+
+    const long timeoutSeconds = state == StateMachine::State::TELEMETRY ? 3L : 5L;
+    return std::chrono::duration_cast<std::chrono::seconds>(now - session.lastPacketTime).count() >= timeoutSeconds;
+}
+
+void removeSession(
+    SessionMap& sessions,
+    SocketHandle socketHandle,
+    std::atomic<bool>& running) {
+    const auto sessionIt = sessions.find(socketHandle);
+    if (sessionIt == sessions.end()) {
+        return;
+    }
+
+    closeClientSession(sessionIt->second);
+    sessions.erase(sessionIt);
 }
 
 void serverThreadMain(
     SocketHandle listenSocket,
     std::atomic<bool>& running,
     Logger& logger,
-    SharedServerState& sharedState,
-    bool stopAfterSingleSession) {
-    StateMachine stateMachine;
-    std::uint32_t sequenceCounter = 1;
+    SharedServerState& sharedState) {
+    SessionMap sessions;
 
     while (running.load()) {
-        sockaddr_in clientAddress {};
-        SockLenType clientLength = static_cast<SockLenType>(sizeof(clientAddress));
-        const SocketHandle clientSocket =
-            accept(listenSocket, reinterpret_cast<sockaddr*>(&clientAddress), &clientLength);
-
-        if (clientSocket == INVALID_SOCK) {
-            if (running.load()) {
-                logger.logInfo(socketErrorString("accept() failed"));
+        const std::string weatherRequestAircraftId = consumeWeatherRequest(sharedState);
+        if (!weatherRequestAircraftId.empty()) {
+            const auto sessionIt = findSessionByAircraftId(sessions, weatherRequestAircraftId);
+            if (sessionIt != sessions.end()) {
+                if (!sendWeatherMap(sessionIt->second, logger, sharedState)) {
+                    removeSession(sessions, sessionIt->first, running);
+                    continue;
+                }
             }
-            continue;
         }
 
-        if (!stateMachine.transition(StateMachine::State::HANDSHAKE_PENDING)) {
-            closeSocket(clientSocket);
-            continue;
-        }
-        setDashboardConnection(sharedState, StateMachine::State::HANDSHAKE_PENDING, false, "N/A");
-
-        PacketHeader header {};
-        if (!recvAll(clientSocket, &header, sizeof(header))) {
-            handleFault(logger, sharedState, stateMachine, std::string(), "HandshakeReceiveFailure", 0);
-            closeSocket(clientSocket);
-            continue;
-        }
-
-        logger.logPacket("RX", header);
-        appendDashboardLog(sharedState, compactPacketLog("RX", header));
-
-        const std::string aircraftId = extractAircraftId(header.aircraft_id);
-        if (header.packet_type != PacketType::HANDSHAKE_REQUEST || header.payload_size != 0 ||
-            !validateAircraftId(aircraftId)) {
-            PacketHeader failHeader = makeHeader(PacketType::HANDSHAKE_FAIL, aircraftId, header.sequence_number, 0, 0);
-            sendPacket(clientSocket, failHeader, nullptr);
-            logger.logPacket("TX", failHeader);
-            appendDashboardLog(sharedState, compactPacketLog("TX", failHeader));
-            stateMachine.transition(StateMachine::State::DISCONNECTED);
-            setDashboardConnection(sharedState, StateMachine::State::DISCONNECTED, false, "N/A", "Invalid handshake");
-            closeSocket(clientSocket);
-            continue;
-        }
-
-        PacketHeader ackHeader = makeHeader(PacketType::HANDSHAKE_ACK, aircraftId, header.sequence_number, 0, 0);
-        if (!sendPacket(clientSocket, ackHeader, nullptr)) {
-            handleFault(logger, sharedState, stateMachine, aircraftId, "HandshakeAckSendFailure", header.sequence_number);
-            closeSocket(clientSocket);
-            continue;
-        }
-
-        logger.logPacket("TX", ackHeader);
-        appendDashboardLog(sharedState, compactPacketLog("TX", ackHeader));
-        stateMachine.transition(StateMachine::State::CONNECTED);
-        setDashboardConnection(sharedState, StateMachine::State::CONNECTED, true, aircraftId);
-
-        bool connected = true;
-        std::uint32_t lastSequence = header.sequence_number;
-        auto lastPacketTime = std::chrono::steady_clock::now();
-
-        while (running.load() && connected) {
-            bool sendWeatherRequested = false;
-            bool disconnectRequested = false;
-            clearDashboardFlags(sharedState, sendWeatherRequested, disconnectRequested);
-
-            if (disconnectRequested) {
-                if (stateMachine.getState() == StateMachine::State::TELEMETRY) {
-                    stateMachine.transition(StateMachine::State::CONNECTED);
+        const std::string disconnectRequestAircraftId = consumeDisconnectRequest(sharedState);
+        if (!disconnectRequestAircraftId.empty()) {
+            const auto sessionIt = findSessionByAircraftId(sessions, disconnectRequestAircraftId);
+            if (sessionIt != sessions.end()) {
+                ClientSession& session = sessionIt->second;
+                if (session.stateMachine.getState() == StateMachine::State::TELEMETRY) {
+                    session.stateMachine.transition(StateMachine::State::CONNECTED);
                 }
                 PacketHeader disconnectHeader =
-                    makeHeader(PacketType::DISCONNECT, aircraftId, sequenceCounter++, 0, 0);
-                sendPacket(clientSocket, disconnectHeader, nullptr);
-                logger.logPacket("TX", disconnectHeader);
-                appendDashboardLog(sharedState, compactPacketLog("TX", disconnectHeader));
-                stateMachine.transition(StateMachine::State::DISCONNECTED);
-                setDashboardConnection(sharedState, StateMachine::State::DISCONNECTED, false, "N/A");
-                connected = false;
-                break;
-            }
-
-            if (sendWeatherRequested) {
-                if (!sendWeatherMap(
-                        clientSocket,
-                        logger,
-                        sharedState,
-                        stateMachine,
-                        aircraftId,
-                        sequenceCounter,
-                        lastSequence)) {
-                    connected = false;
-                    break;
+                    makeHeader(PacketType::DISCONNECT, session.aircraftId, session.serverSequence++, 0, 0);
+                if (sendPacket(session.socket, disconnectHeader, nullptr)) {
+                    logger.logPacket("TX", disconnectHeader);
+                    appendDashboardLog(sharedState, compactPacketLog("TX", disconnectHeader));
+                    session.stateMachine.transition(StateMachine::State::DISCONNECTED);
+                    updateDashboardAircraft(sharedState, session);
+                } else {
+                    handleFault(session, logger, sharedState, "DisconnectSendFailure");
                 }
-                lastPacketTime = std::chrono::steady_clock::now();
+                removeSession(sessions, sessionIt->first, running);
+                continue;
             }
+        }
 
-            if (!waitForReadable(clientSocket, 250)) {
-                const auto now = std::chrono::steady_clock::now();
-                const auto timeoutSeconds =
-                    stateMachine.getState() == StateMachine::State::TELEMETRY ? 3 : 5;
-                if (std::chrono::duration_cast<std::chrono::seconds>(now - lastPacketTime).count() >= timeoutSeconds &&
-                    stateMachine.getState() != StateMachine::State::DISCONNECTED) {
-                    handleFault(logger, sharedState, stateMachine, aircraftId, "SocketTimeout", lastSequence);
-                    connected = false;
+        const auto now = std::chrono::steady_clock::now();
+        std::vector<SocketHandle> timedOutSessions;
+        for (const auto& [socketHandle, session] : sessions) {
+            if (sessionTimedOut(session, now)) {
+                timedOutSessions.push_back(socketHandle);
+            }
+        }
+        for (SocketHandle socketHandle : timedOutSessions) {
+            auto sessionIt = sessions.find(socketHandle);
+            if (sessionIt == sessions.end()) {
+                continue;
+            }
+            handleFault(sessionIt->second, logger, sharedState, "SocketTimeout");
+            removeSession(sessions, socketHandle, running);
+        }
+        if (!running.load()) {
+            break;
+        }
+
+        fd_set readSet;
+        FD_ZERO(&readSet);
+        FD_SET(listenSocket, &readSet);
+
+        SocketHandle maxSocket = listenSocket;
+        for (const auto& [socketHandle, session] : sessions) {
+            if (session.socket != INVALID_SOCK) {
+                FD_SET(session.socket, &readSet);
+                if (session.socket > maxSocket) {
+                    maxSocket = session.socket;
                 }
+            }
+        }
+
+        timeval timeout {};
+        timeout.tv_sec = 0;
+        timeout.tv_usec = 250000;
+
+#ifdef _WIN32
+        const int selectResult = select(0, &readSet, nullptr, nullptr, &timeout);
+#else
+        const int selectResult = select(maxSocket + 1, &readSet, nullptr, nullptr, &timeout);
+#endif
+        if (selectResult < 0) {
+            if (running.load()) {
+                logger.logInfo(socketErrorString("select() failed"));
+            }
+            continue;
+        }
+        if (selectResult == 0) {
+            continue;
+        }
+
+        if (FD_ISSET(listenSocket, &readSet)) {
+            sockaddr_in clientAddress {};
+            SockLenType clientLength = static_cast<SockLenType>(sizeof(clientAddress));
+            const SocketHandle clientSocket =
+                accept(listenSocket, reinterpret_cast<sockaddr*>(&clientAddress), &clientLength);
+            if (clientSocket != INVALID_SOCK) {
+                ClientSession session;
+                session.socket = clientSocket;
+                session.lastPacketTime = std::chrono::steady_clock::now();
+                session.stateMachine.transition(StateMachine::State::HANDSHAKE_PENDING);
+                sessions.emplace(clientSocket, std::move(session));
+            } else if (running.load()) {
+                logger.logInfo(socketErrorString("accept() failed"));
+            }
+        }
+
+        std::vector<SocketHandle> readySessions;
+        for (const auto& [socketHandle, session] : sessions) {
+            if (FD_ISSET(socketHandle, &readSet)) {
+                readySessions.push_back(socketHandle);
+            }
+        }
+
+        for (SocketHandle socketHandle : readySessions) {
+            auto sessionIt = sessions.find(socketHandle);
+            if (sessionIt == sessions.end()) {
                 continue;
             }
 
-            if (!recvAll(clientSocket, &header, sizeof(header))) {
-                handleFault(logger, sharedState, stateMachine, aircraftId, "ReceiveFailure", lastSequence);
-                connected = false;
-                break;
-            }
-
-            logger.logPacket("RX", header);
-            appendDashboardLog(sharedState, compactPacketLog("RX", header));
-            lastPacketTime = std::chrono::steady_clock::now();
-            lastSequence = header.sequence_number;
-
-            std::vector<std::uint8_t> payload;
-            if (!receivePacketPayload(clientSocket, header, payload)) {
-                handleFault(logger, sharedState, stateMachine, aircraftId, "PayloadReceiveFailure", lastSequence);
-                connected = false;
-                break;
-            }
-
-            if (computeChecksum(payload.data(), header.payload_size) != header.checksum) {
-                handleFault(logger, sharedState, stateMachine, aircraftId, "ChecksumMismatch", lastSequence);
-                connected = false;
-                break;
-            }
-
-            switch (header.packet_type) {
-                case PacketType::TELEMETRY: {
-                    if (header.payload_size != sizeof(TelemetryPayload)) {
-                        handleFault(logger, sharedState, stateMachine, aircraftId, "TelemetrySizeMismatch", lastSequence);
-                        connected = false;
-                        break;
-                    }
-                    if (stateMachine.getState() == StateMachine::State::CONNECTED) {
-                        stateMachine.transition(StateMachine::State::TELEMETRY);
-                    }
-                    TelemetryPayload telemetry {};
-                    std::memcpy(&telemetry, payload.data(), sizeof(telemetry));
-                    updateTelemetry(sharedState, telemetry);
+            if (!processReadableSession(sessions, sessionIt, logger, sharedState)) {
+                removeSession(sessions, socketHandle, running);
+                if (!running.load()) {
                     break;
                 }
-                case PacketType::LARGE_FILE: {
-                    if (stateMachine.getState() == StateMachine::State::TELEMETRY) {
-                        stateMachine.transition(StateMachine::State::CONNECTED);
-                    }
-                    if (!sendWeatherMap(
-                            clientSocket,
-                            logger,
-                            sharedState,
-                            stateMachine,
-                            aircraftId,
-                            sequenceCounter,
-                            lastSequence)) {
-                        connected = false;
-                    }
-                    break;
-                }
-                case PacketType::DISCONNECT:
-                    if (stateMachine.getState() == StateMachine::State::TELEMETRY) {
-                        stateMachine.transition(StateMachine::State::CONNECTED);
-                    }
-                    stateMachine.transition(StateMachine::State::DISCONNECTED);
-                    setDashboardConnection(sharedState, StateMachine::State::DISCONNECTED, false, "N/A");
-                    connected = false;
-                    break;
-                default:
-                    handleFault(logger, sharedState, stateMachine, aircraftId, "UnexpectedPacketType", lastSequence);
-                    connected = false;
-                    break;
             }
         }
+    }
 
-        shutdownSocket(clientSocket);
-        closeSocket(clientSocket);
-        if (stateMachine.getState() != StateMachine::State::DISCONNECTED) {
-            stateMachine.transition(StateMachine::State::DISCONNECTED);
-        }
-        if (!dashboardShowsFault(sharedState)) {
-            setDashboardConnection(sharedState, StateMachine::State::DISCONNECTED, false, "N/A");
-        }
-
-        if (stopAfterSingleSession) {
-            running.store(false);
-        }
+    for (auto& [socketHandle, session] : sessions) {
+        closeClientSession(session);
     }
 }
 
@@ -529,7 +633,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    if (listen(listenSocket, 4) == SOCK_ERR) {
+    if (listen(listenSocket, 8) == SOCK_ERR) {
         std::cerr << "Unable to listen on server socket on port " << options.listenPort << ".\n";
         closeSocket(listenSocket);
         cleanupSockets();
@@ -540,15 +644,13 @@ int main(int argc, char* argv[]) {
     std::atomic<bool> running {true};
 
     if (options.headless) {
-        std::cout << "Ground server running in headless mode on port " << options.listenPort
-                  << " for a single test session.\n";
+        std::cout << "Ground server running in headless mode on port " << options.listenPort << ".\n";
         std::thread worker(
             serverThreadMain,
             listenSocket,
             std::ref(running),
             std::ref(logger),
-            std::ref(sharedState),
-            true);
+            std::ref(sharedState));
         if (worker.joinable()) {
             worker.join();
         }
@@ -576,7 +678,7 @@ int main(int argc, char* argv[]) {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
 #endif
-    GLFWwindow* window = glfwCreateWindow(980, 700, "Ground Control - CSCN74000", nullptr, nullptr);
+    GLFWwindow* window = glfwCreateWindow(1080, 760, "Ground Control - CSCN74000", nullptr, nullptr);
     if (window == nullptr) {
         std::cerr << "Unable to create GLFW window.\n";
         glfwTerminate();
@@ -602,8 +704,7 @@ int main(int argc, char* argv[]) {
         listenSocket,
         std::ref(running),
         std::ref(logger),
-        std::ref(sharedState),
-        false);
+        std::ref(sharedState));
 
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();

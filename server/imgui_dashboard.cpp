@@ -1,6 +1,7 @@
 #include "imgui_dashboard.h"
 
 #include <cstdio>
+#include <string>
 
 namespace {
 
@@ -28,6 +29,25 @@ void renderTelemetryValue(const char* label, const char* value) {
     ImGui::TextUnformatted(value);
 }
 
+AircraftDashboardState* selectedAircraft(DashboardState& state) {
+    if (state.selectedAircraftId.empty() && !state.aircraft.empty()) {
+        state.selectedAircraftId = state.aircraft.begin()->first;
+    }
+
+    auto selected = state.aircraft.find(state.selectedAircraftId);
+    if (selected != state.aircraft.end()) {
+        return &selected->second;
+    }
+
+    if (!state.aircraft.empty()) {
+        state.selectedAircraftId = state.aircraft.begin()->first;
+        return &state.aircraft.begin()->second;
+    }
+
+    state.selectedAircraftId.clear();
+    return nullptr;
+}
+
 } // namespace
 
 ImVec4 stateColor(StateMachine::State state) {
@@ -48,62 +68,79 @@ ImVec4 stateColor(StateMachine::State state) {
 }
 
 void renderDashboard(DashboardState& state) {
-    ImGui::SetNextWindowSize(ImVec2(980.0f, 700.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(1080.0f, 760.0f), ImGuiCond_FirstUseEver);
     ImGui::Begin("Ground Control Operator Dashboard");
 
     ImGui::TextUnformatted("GROUND CONTROL OPERATOR DASHBOARD");
     ImGui::Separator();
 
-    ImGui::BeginChild("connection_panel", ImVec2(270.0f, 240.0f), true);
-    ImGui::TextUnformatted("CONNECTION");
+    AircraftDashboardState* selected = selectedAircraft(state);
+    const bool canControlSelected = selected != nullptr && selected->connected;
+
+    ImGui::BeginChild("aircraft_panel", ImVec2(300.0f, 260.0f), true);
+    ImGui::TextUnformatted("TRACKED AIRCRAFT");
     ImGui::Separator();
-    ImGui::Text("Status:");
-    ImGui::SameLine();
-    ImGui::TextColored(stateColor(state.state), "%s", state.connected ? "CONNECTED" : "DISCONNECTED");
-    ImGui::Text("State:");
-    ImGui::SameLine();
-    ImGui::TextColored(stateColor(state.state), "%s", shortStateLabel(state.state));
-    ImGui::Text("Aircraft:");
-    ImGui::SameLine();
-    ImGui::TextUnformatted(state.aircraftId.c_str());
+    ImGui::Text("Known Aircraft: %d", static_cast<int>(state.aircraft.size()));
     ImGui::Spacing();
-    if (ImGui::Button("Send Weather Map to Aircraft", ImVec2(-1.0f, 0.0f))) {
-        state.requestSendWeather = true;
+
+    for (auto& [aircraftId, aircraft] : state.aircraft) {
+        const bool isSelected = aircraftId == state.selectedAircraftId;
+        std::string label = aircraftId + " [" + shortStateLabel(aircraft.state) + "]";
+        if (ImGui::Selectable(label.c_str(), isSelected)) {
+            state.selectedAircraftId = aircraftId;
+            selected = &aircraft;
+        }
     }
-    if (ImGui::Button("Disconnect", ImVec2(-1.0f, 0.0f))) {
-        state.requestDisconnect = true;
+
+    ImGui::Spacing();
+    ImGui::BeginDisabled(!canControlSelected);
+    if (ImGui::Button("Send Weather Map to Selected", ImVec2(-1.0f, 0.0f)) && selected != nullptr) {
+        state.weatherRequestAircraftId = selected->aircraftId;
     }
-    if (!state.alertMessage.empty()) {
-        ImGui::Spacing();
-        ImGui::TextColored(ImVec4(0.95f, 0.25f, 0.25f, 1.0f), "Alert: %s", state.alertMessage.c_str());
+    if (ImGui::Button("Disconnect Selected", ImVec2(-1.0f, 0.0f)) && selected != nullptr) {
+        state.disconnectRequestAircraftId = selected->aircraftId;
     }
+    ImGui::EndDisabled();
     ImGui::EndChild();
 
     ImGui::SameLine();
 
-    ImGui::BeginChild("telemetry_panel", ImVec2(0.0f, 240.0f), true);
-    ImGui::TextUnformatted("LIVE TELEMETRY");
+    ImGui::BeginChild("telemetry_panel", ImVec2(0.0f, 260.0f), true);
+    ImGui::TextUnformatted("SELECTED AIRCRAFT");
     ImGui::Separator();
-    renderTelemetryValue("Aircraft ID", state.aircraftId.c_str());
 
-    char buffer[64] {};
-    if (state.telemetryValid) {
-        std::snprintf(buffer, sizeof(buffer), "%.4f", state.telemetry.latitude);
-        renderTelemetryValue("Latitude", buffer);
-        std::snprintf(buffer, sizeof(buffer), "%.4f", state.telemetry.longitude);
-        renderTelemetryValue("Longitude", buffer);
-        std::snprintf(buffer, sizeof(buffer), "%.0f ft", state.telemetry.altitude);
-        renderTelemetryValue("Altitude", buffer);
-        std::snprintf(buffer, sizeof(buffer), "%.1f kts", state.telemetry.speed);
-        renderTelemetryValue("Speed", buffer);
-        std::snprintf(buffer, sizeof(buffer), "%.0f deg", state.telemetry.heading);
-        renderTelemetryValue("Heading", buffer);
+    if (selected == nullptr) {
+        ImGui::TextUnformatted("No aircraft connected yet.");
     } else {
-        renderTelemetryValue("Latitude", "--");
-        renderTelemetryValue("Longitude", "--");
-        renderTelemetryValue("Altitude", "--");
-        renderTelemetryValue("Speed", "--");
-        renderTelemetryValue("Heading", "--");
+        renderTelemetryValue("Aircraft ID", selected->aircraftId.c_str());
+        ImGui::Text("State:");
+        ImGui::SameLine();
+        ImGui::TextColored(stateColor(selected->state), "%s", shortStateLabel(selected->state));
+
+        char buffer[64] {};
+        if (selected->telemetryValid) {
+            std::snprintf(buffer, sizeof(buffer), "%.4f", selected->telemetry.latitude);
+            renderTelemetryValue("Latitude", buffer);
+            std::snprintf(buffer, sizeof(buffer), "%.4f", selected->telemetry.longitude);
+            renderTelemetryValue("Longitude", buffer);
+            std::snprintf(buffer, sizeof(buffer), "%.0f ft", selected->telemetry.altitude);
+            renderTelemetryValue("Altitude", buffer);
+            std::snprintf(buffer, sizeof(buffer), "%.1f kts", selected->telemetry.speed);
+            renderTelemetryValue("Speed", buffer);
+            std::snprintf(buffer, sizeof(buffer), "%.0f deg", selected->telemetry.heading);
+            renderTelemetryValue("Heading", buffer);
+        } else {
+            renderTelemetryValue("Latitude", "--");
+            renderTelemetryValue("Longitude", "--");
+            renderTelemetryValue("Altitude", "--");
+            renderTelemetryValue("Speed", "--");
+            renderTelemetryValue("Heading", "--");
+        }
+
+        if (!selected->alertMessage.empty()) {
+            ImGui::Spacing();
+            ImGui::TextColored(ImVec4(0.95f, 0.25f, 0.25f, 1.0f), "Alert: %s", selected->alertMessage.c_str());
+        }
     }
     ImGui::EndChild();
 
