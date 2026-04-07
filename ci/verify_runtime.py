@@ -20,6 +20,8 @@ STARTUP_GRACE_SECONDS = 1.5
 CLIENT_TIMEOUT_SECONDS = 40
 SERVER_SHUTDOWN_TIMEOUT_SECONDS = 10
 BUILD_CONFIG = os.environ.get("CI_BUILD_CONFIG", "").strip()
+PREFER_GUI = os.environ.get("CI_PREFER_GUI", "1").strip() != "0"
+USE_XVFB = os.environ.get("CI_USE_XVFB", "").strip() == "1"
 
 
 def candidate_executable_paths(name: str) -> list[Path]:
@@ -95,15 +97,34 @@ def verify_logs() -> None:
         raise AssertionError("Black box log contains fault entries during verification.")
 
 
-def main() -> int:
-    server_executable = find_executable("ground_server")
-    client_executable = find_executable("aircraft_client")
-    port = choose_port()
+def server_command(server_executable: Path, port: int, mode: str) -> list[str]:
+    command: list[str] = []
+    if mode == "gui" and USE_XVFB:
+        command.extend(["xvfb-run", "-a"])
 
+    command.append(str(server_executable))
+    if mode == "headless":
+        command.append("--headless")
+    command.append(str(port))
+    return command
+
+
+def terminate_process(process: subprocess.Popen[str]) -> None:
+    if process.poll() is None:
+        process.terminate()
+        try:
+            process.communicate(timeout=SERVER_SHUTDOWN_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.communicate(timeout=SERVER_SHUTDOWN_TIMEOUT_SECONDS)
+
+
+def run_verification_mode(server_executable: Path, client_executable: Path, mode: str) -> None:
+    port = choose_port()
     shutil.rmtree(RUNTIME_DIR, ignore_errors=True)
 
     server_process = subprocess.Popen(
-        [str(server_executable), "--headless", str(port)],
+        server_command(server_executable, port, mode),
         cwd=ROOT,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -138,19 +159,27 @@ def main() -> int:
             )
 
         verify_logs()
-
-        print("Headless verification passed.")
-        print(f"Server executable: {server_executable}")
-        print(f"Client executable: {client_executable}")
-        return 0
     finally:
-        if server_process.poll() is None:
-            server_process.terminate()
-            try:
-                server_process.communicate(timeout=SERVER_SHUTDOWN_TIMEOUT_SECONDS)
-            except subprocess.TimeoutExpired:
-                server_process.kill()
-                server_process.communicate(timeout=SERVER_SHUTDOWN_TIMEOUT_SECONDS)
+        terminate_process(server_process)
+
+
+def main() -> int:
+    server_executable = find_executable("ground_server")
+    client_executable = find_executable("aircraft_client")
+    modes = ["gui", "headless"] if PREFER_GUI else ["headless"]
+    failures: list[str] = []
+
+    for mode in modes:
+        try:
+            run_verification_mode(server_executable, client_executable, mode)
+            print(f"Verification passed using {mode} mode.")
+            print(f"Server executable: {server_executable}")
+            print(f"Client executable: {client_executable}")
+            return 0
+        except Exception as exc:
+            failures.append(f"{mode}: {exc}")
+
+    raise RuntimeError("All verification modes failed.\n" + "\n\n".join(failures))
 
 
 if __name__ == "__main__":

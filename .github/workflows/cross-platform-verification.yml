@@ -20,16 +20,19 @@ jobs:
             build_command: cmake --build build --parallel
             python_command: python3
             build_config: ""
+            use_xvfb: "1"
           - os: macos-latest
             configure_command: cmake -B build -DCMAKE_BUILD_TYPE=Release
             build_command: cmake --build build --parallel
             python_command: python3
             build_config: ""
+            use_xvfb: "0"
           - os: windows-latest
             configure_command: cmake -B build
             build_command: cmake --build build --config Release --parallel
             python_command: python
             build_config: Release
+            use_xvfb: "0"
 
     steps:
       - name: Check out repository
@@ -44,7 +47,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgl1-mesa-dev xorg-dev
+          sudo apt-get install -y libgl1-mesa-dev xorg-dev xvfb
 
       - name: Configure CMake
         run: ${{ matrix.configure_command }}
@@ -55,6 +58,8 @@ jobs:
       - name: Verify headless client/server flow
         env:
           CI_BUILD_CONFIG: ${{ matrix.build_config }}
+          CI_PREFER_GUI: "1"
+          CI_USE_XVFB: ${{ matrix.use_xvfb }}
         run: ${{ matrix.python_command }} ci/verify_runtime.py
 
       - name: Upload runtime artifacts
