@@ -37,3 +37,9 @@ This file is updated after implementation commits with timestamps, commit hashes
 - Commit: `c3ae0c1`
 - Files changed: `changelog.md`
 - Summary: Renamed the changelog file and updated its heading to the new title.
+
+## 2026-04-07 08:16:11 UTC
+
+- Commit: `7ea5165`
+- Files changed: `AGENT_BUILD_SPEC.md`, `README.md`, `server/main.cpp`, `changelog.md`
+- Summary: Removed the old build spec from the repo, normalized the changelog filename to lowercase, moved ImGui runtime settings into `runtime/ui/`, and kept the macOS GLFW startup fix in the server.
