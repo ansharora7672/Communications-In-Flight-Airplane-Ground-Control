@@ -456,7 +456,22 @@ void serverThreadMain(
 
 } // namespace
 
-int main() {
+int main(int argc, char* argv[]) {
+    std::uint16_t listenPort = kDefaultPort;
+    if (argc > 1) {
+        try {
+            const int parsedPort = std::stoi(argv[1]);
+            if (parsedPort < 1 || parsedPort > 65535) {
+                std::cerr << "Invalid port. Please choose a value between 1 and 65535.\n";
+                return 1;
+            }
+            listenPort = static_cast<std::uint16_t>(parsedPort);
+        } catch (const std::exception&) {
+            std::cerr << "Invalid port argument. Usage: ./ground_server [port]\n";
+            return 1;
+        }
+    }
+
     if (!std::filesystem::exists(kWeatherMapPath)) {
         generateWeatherMap(kWeatherMapPath);
     }
@@ -475,18 +490,18 @@ int main() {
 
     sockaddr_in address {};
     address.sin_family = AF_INET;
-    address.sin_port = htons(kDefaultPort);
+    address.sin_port = htons(listenPort);
     address.sin_addr.s_addr = htonl(INADDR_ANY);
 
     if (bind(listenSocket, reinterpret_cast<const sockaddr*>(&address), sizeof(address)) == SOCK_ERR) {
-        std::cerr << "Unable to bind server socket.\n";
+        std::cerr << "Unable to bind server socket on port " << listenPort << ".\n";
         closeSocket(listenSocket);
         cleanupSockets();
         return 1;
     }
 
     if (listen(listenSocket, 4) == SOCK_ERR) {
-        std::cerr << "Unable to listen on server socket.\n";
+        std::cerr << "Unable to listen on server socket on port " << listenPort << ".\n";
         closeSocket(listenSocket);
         cleanupSockets();
         return 1;
