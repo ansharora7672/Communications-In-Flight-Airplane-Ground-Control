@@ -1,42 +1,5 @@
-# Compiled Executables and Objects
-*.com
-*.class
-*.dll
-*.exe
-*.o
-*.so
-*.obj
-*.pdb
-*.ilk
-
-# Qt Specific temporary build files
 build/
-build-*/
-*.user
-*.user.*
-moc_*.cpp
-ui_*.h
-qrc_*.cpp
-Makefile*
-
-# Visual Studio Specific hidden folders
-.vs/
-*.sln.docstates
-*.suo
-*.userosscache
-*.sln.userprefs
-
-# Visual Studio Build Folders
-[Dd]ebug/
-[Rr]elease/
-x64/
-x86/
-
-# Specific VS junk
-*.tlog
+cmake-build-*/
 *.log
-*.lastbuildstate
-*.recipe
-*.idb
-*.ipch
-*.aps
+received_weather_map.bmp
+assets/weather_map.bmp
