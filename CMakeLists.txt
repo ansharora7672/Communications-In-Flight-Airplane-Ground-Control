@@ -72,3 +72,30 @@ endif()
 if(APPLE)
   target_compile_definitions(ground_server PRIVATE GL_SILENCE_DEPRECATION)
 endif()
+
+include(FetchContent)
+FetchContent_Declare(googletest
+  GIT_REPOSITORY https://github.com/google/googletest.git
+  GIT_TAG v1.14.0
+)
+FetchContent_MakeAvailable(googletest)
+
+enable_testing()
+
+add_executable(unit_tests
+  tests/client_options_tests.cpp
+  tests/client_utils_tests.cpp
+  client/client_options.cpp
+  client/client_utils.cpp
+)
+target_include_directories(unit_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/client
+  ${CMAKE_CURRENT_SOURCE_DIR}/common
+  ${CMAKE_CURRENT_SOURCE_DIR}/server
+)
+target_link_libraries(unit_tests PRIVATE GTest::gtest_main)
+if(WIN32)
+  target_link_libraries(unit_tests PRIVATE ws2_32)
+endif()
+include(GoogleTest)
+gtest_discover_tests(unit_tests)
