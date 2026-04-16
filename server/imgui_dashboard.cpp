@@ -3,6 +3,8 @@
 #include <cstdio>
 #include <string>
 
+#include "server_utils.h"
+
 namespace {
 
 const char* shortStateLabel(StateMachine::State state) {
@@ -102,7 +104,7 @@ void renderDashboard(DashboardState& state) {
     ImGui::Separator();
 
     AircraftDashboardState* selected = selectedAircraft(state);
-    const bool canControlSelected = selected != nullptr && selected->connected;
+    const bool canControlSelected = selected != nullptr && server::isVerifiedSessionState(selected->state);
 
     ImGui::BeginChild("aircraft_panel", ImVec2(300.0f, 260.0f), true);
     ImGui::TextUnformatted("TRACKED AIRCRAFT");

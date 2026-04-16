@@ -76,9 +76,7 @@ void updateDashboardAircraft(
     auto& aircraft = sharedState.dashboard.aircraft[session.aircraftId()];
     aircraft.aircraftId = session.aircraftId();
     aircraft.state = session.stateMachine().getState();
-    aircraft.connected =
-        session.stateMachine().getState() != StateMachine::State::DISCONNECTED &&
-        session.stateMachine().getState() != StateMachine::State::FAULT;
+    aircraft.connected = isVerifiedSessionState(session.stateMachine().getState());
     aircraft.telemetry = session.telemetry();
     aircraft.telemetryValid = session.hasTelemetry();
     aircraft.alertMessage = alertMessage;
@@ -123,6 +121,20 @@ bool aircraftIdInUse(const SessionMap& sessions, SocketHandle currentSocket, con
         }
     }
     return false;
+}
+
+void logIgnoredOperatorRequest(
+    SharedServerState& sharedState,
+    Logger& logger,
+    const ClientSession& session,
+    const std::string& action) {
+    const std::string aircraftId = session.aircraftId().empty() ? "UNKNOWN" : session.aircraftId();
+    const std::string state = session.stateMachine().stateToString(session.stateMachine().getState());
+    const std::string message =
+        "Ignored operator " + action + " request for " + aircraftId +
+        " because the session is not verified (" + state + ").";
+    logger.logInfo(message);
+    appendDashboardLog(sharedState, "[" + timeStampHmsUtc() + "] INFO " + message);
 }
 
 void handleFault(
@@ -371,6 +383,10 @@ void serverThreadMain(
         if (!weatherRequestAircraftId.empty()) {
             const auto sessionIt = findSessionByAircraftId(sessions, weatherRequestAircraftId);
             if (sessionIt != sessions.end()) {
+                if (!isVerifiedSessionState(sessionIt->second.stateMachine().getState())) {
+                    logIgnoredOperatorRequest(sharedState, logger, sessionIt->second, "weather-map");
+                    continue;
+                }
                 if (!sendWeatherMap(sessionIt->second, logger, sharedState)) {
                     removeSession(sessions, sessionIt->first);
                     continue;
@@ -383,6 +399,10 @@ void serverThreadMain(
             const auto sessionIt = findSessionByAircraftId(sessions, disconnectRequestAircraftId);
             if (sessionIt != sessions.end()) {
                 ClientSession& session = sessionIt->second;
+                if (!isVerifiedSessionState(session.stateMachine().getState())) {
+                    logIgnoredOperatorRequest(sharedState, logger, session, "disconnect");
+                    continue;
+                }
                 if (session.stateMachine().getState() == StateMachine::State::TELEMETRY) {
                     session.stateMachine().transition(StateMachine::State::CONNECTED);
                 }
