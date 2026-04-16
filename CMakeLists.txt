@@ -5,6 +5,77 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+option(AVIATION_COMMS_ENABLE_COVERAGE "Enable source-based coverage instrumentation for project targets." OFF)
+option(AVIATION_COMMS_ENABLE_STRICT_WARNINGS "Enable strict compiler warnings for project-owned sources." OFF)
+option(AVIATION_COMMS_ENABLE_SANITIZERS "Enable runtime sanitizers for project targets." OFF)
+set(AVIATION_COMMS_SANITIZER_SET "address,undefined" CACHE STRING
+  "Comma-separated sanitizer list when AVIATION_COMMS_ENABLE_SANITIZERS is ON.")
+
+function(aviation_split_csv_to_list out_var csv_value)
+  string(REPLACE "," ";" parsed_list "${csv_value}")
+  set(${out_var} "${parsed_list}" PARENT_SCOPE)
+endfunction()
+
+function(aviation_apply_linker_instrumentation target)
+  if(AVIATION_COMMS_ENABLE_COVERAGE)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+      target_compile_options(${target} PRIVATE -fprofile-instr-generate -fcoverage-mapping)
+      target_link_options(${target} PRIVATE -fprofile-instr-generate -fcoverage-mapping)
+    elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+      target_compile_options(${target} PRIVATE --coverage)
+      target_link_options(${target} PRIVATE --coverage)
+    endif()
+  endif()
+
+  if(AVIATION_COMMS_ENABLE_SANITIZERS)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+      aviation_split_csv_to_list(aviation_sanitizer_list "${AVIATION_COMMS_SANITIZER_SET}")
+      foreach(sanitizer IN LISTS aviation_sanitizer_list)
+        string(STRIP "${sanitizer}" sanitizer)
+        if(NOT sanitizer STREQUAL "")
+          target_compile_options(${target} PRIVATE -fsanitize=${sanitizer} -fno-omit-frame-pointer)
+          target_link_options(${target} PRIVATE -fsanitize=${sanitizer} -fno-omit-frame-pointer)
+        endif()
+      endforeach()
+    endif()
+  endif()
+endfunction()
+
+function(aviation_apply_source_warnings)
+  if(NOT AVIATION_COMMS_ENABLE_STRICT_WARNINGS)
+    return()
+  endif()
+
+  set(options)
+  set(one_value_args)
+  set(multi_value_args SOURCES)
+  cmake_parse_arguments(AVIATION_WARN "${options}" "${one_value_args}" "${multi_value_args}" ${ARGN})
+
+  if(NOT AVIATION_WARN_SOURCES)
+    return()
+  endif()
+
+  set(project_warning_flags "")
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    list(APPEND project_warning_flags
+      -Wall
+      -Wextra
+      -Wpedantic
+      -Wconversion
+      -Wsign-conversion
+      -Wshadow
+      -Wdouble-promotion
+      -Wformat=2
+      -Wnull-dereference
+      -Wimplicit-fallthrough
+    )
+  endif()
+
+  foreach(source IN LISTS AVIATION_WARN_SOURCES)
+    set_source_files_properties(${source} PROPERTIES COMPILE_OPTIONS "${project_warning_flags}")
+  endforeach()
+endfunction()
+
 include(FetchContent)
 
 FetchContent_Declare(glfw
@@ -34,6 +105,8 @@ target_include_directories(common
   PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/common
 )
+aviation_apply_linker_instrumentation(common)
+aviation_apply_source_warnings(SOURCES common/logger.cpp)
 
 add_executable(aircraft_client
   client/aircraft_client.cpp
@@ -44,6 +117,15 @@ add_executable(aircraft_client
   client/flight_sim.cpp
 )
 target_link_libraries(aircraft_client PRIVATE common)
+aviation_apply_linker_instrumentation(aircraft_client)
+aviation_apply_source_warnings(SOURCES
+  client/aircraft_client.cpp
+  client/client_app.cpp
+  client/client_options.cpp
+  client/main.cpp
+  client/client_utils.cpp
+  client/flight_sim.cpp
+)
 
 add_executable(ground_server
   server/client_session.cpp
@@ -62,6 +144,22 @@ target_include_directories(ground_server
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/imgui
 )
 target_link_libraries(ground_server PRIVATE common glfw OpenGL::GL)
+aviation_apply_linker_instrumentation(ground_server)
+aviation_apply_source_warnings(SOURCES
+  server/client_session.cpp
+  server/ground_server.cpp
+  server/main.cpp
+  server/server_options.cpp
+  server/server_utils.cpp
+  server/state_machine.cpp
+  server/weather_map.cpp
+  server/imgui_dashboard.cpp
+)
+if(AVIATION_COMMS_ENABLE_STRICT_WARNINGS)
+  foreach(imgui_source IN LISTS IMGUI_SOURCES)
+    set_source_files_properties(${imgui_source} PROPERTIES COMPILE_OPTIONS "-w")
+  endforeach()
+endif()
 
 if(WIN32)
   target_compile_definitions(common INTERFACE NOMINMAX WIN32_LEAN_AND_MEAN)
@@ -109,6 +207,17 @@ target_include_directories(unit_tests PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/server
 )
 target_link_libraries(unit_tests PRIVATE GTest::gtest_main)
+aviation_apply_linker_instrumentation(unit_tests)
+aviation_apply_source_warnings(SOURCES
+  client/client_options.cpp
+  client/client_utils.cpp
+  common/logger.cpp
+  server/client_session.cpp
+  server/server_options.cpp
+  server/server_utils.cpp
+  server/state_machine.cpp
+  server/weather_map.cpp
+)
 if(WIN32)
   target_link_libraries(unit_tests PRIVATE ws2_32)
 endif()

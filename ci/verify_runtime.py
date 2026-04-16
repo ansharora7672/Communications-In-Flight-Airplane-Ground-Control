@@ -14,7 +14,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-BUILD_DIR = ROOT / "build"
+BUILD_DIR = Path(os.environ.get("CI_BUILD_DIR", str(ROOT / "build"))).expanduser()
 RUNTIME_DIR = ROOT / "runtime"
 HOST = "127.0.0.1"
 STARTUP_TIMEOUT_SECONDS = 20

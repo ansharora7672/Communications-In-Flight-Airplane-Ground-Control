@@ -1,6 +1,7 @@
 build/
 cmake-build-*/
 runtime/
+reports/analysis/
 .DS_Store
 untracked_files/
 ci/__pycache__

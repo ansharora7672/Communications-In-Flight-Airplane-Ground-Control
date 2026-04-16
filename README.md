@@ -106,11 +106,24 @@ The submission evidence is intended to be reproducible from the repository:
 
 - `ctest --test-dir build --output-on-failure` covers the fast unit/regression suite.
 - `python3 ci/verify_runtime.py` validates the runtime communication flow and produces fresh log/BMP artifacts.
+- `python3 ci/analyze_project.py coverage` generates unit-only and combined unit + runtime coverage artifacts under `reports/analysis/<timestamp>/coverage/`.
+- `python3 ci/analyze_project.py static-analysis` runs project-scoped cppcheck quality checks plus MISRA-style analysis when the addon is available.
+- `python3 ci/analyze_project.py warnings` builds project-owned production targets with strict warnings enabled and summarizes any remaining diagnostics.
+- `python3 ci/analyze_project.py sanitizers` reruns the unit suite and headless runtime verifier under AddressSanitizer and UndefinedBehaviorSanitizer.
+- `python3 ci/analyze_project.py all` runs the full evidence pipeline and writes a report-ready outline plus traceability matrix under `reports/analysis/<timestamp>/report/`.
 - `runtime/logs/aircraft_comms/` and `runtime/logs/groundctrl_comms/` provide packet-level TX/RX traces with UTC timestamps, packet type, aircraft ID, sequence number, and payload size.
 - `runtime/logs/blackbox/` captures server-side fault entries with cause, state, and sequence number when an active TCP session fails unexpectedly.
 - `runtime/bitmaps/generated/` and `runtime/bitmaps/received/` provide matching evidence for the 1 MB+ weather-map transfer requirement.
 
 The runtime verifier checks that telemetry packets arrive in-order on the server log, that server-originated command packets appear only after handshake verification, that the nominal run leaves the black-box log empty, and that the forced-fault run records a matching receive-failure entry in both server and black-box logs.
+
+## Analysis And Report Generation
+
+The evidence-generation scripts use dedicated analysis build directories under `reports/analysis/<timestamp>/build/` so the normal `build/` tree remains untouched. Each workflow writes raw command logs plus report-ready CSV, JSON, and Markdown summaries that scope metrics to project-owned production code in `client/`, `common/`, and `server/`.
+
+The generated report artifacts intentionally exclude `third_party/`, `tests/`, runtime-generated outputs, and workbook files from compliance metrics. Unit-test coverage and combined unit + runtime coverage are reported separately so runtime-heavy files such as `client/aircraft_client.cpp`, `client/client_app.cpp`, `server/ground_server.cpp`, and `server/imgui_dashboard.cpp` are not understated by the Google Test target alone.
+
+Static-analysis evidence is classroom-focused rather than certification-oriented. When `cppcheck` is available, the analysis workflow records general quality findings and MISRA-style findings for in-scope code only, but it does not claim formal MISRA certification.
 
 ## Traceability And Defect Handling
 
