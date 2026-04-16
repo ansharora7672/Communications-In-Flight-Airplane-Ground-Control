@@ -9,6 +9,16 @@ cmake -B build
 cmake --build build
 ```
 
+## Test
+
+```bash
+cmake -B build
+cmake --build build --target unit_tests
+ctest --test-dir build --output-on-failure
+```
+
+The automated Google Test suite currently contains 57 unit tests covering client/server utilities, option parsing, session state, packet handling, payload ownership, weather-map helpers, and state-machine transitions.
+
 ## Run
 
 ```bash
@@ -70,8 +80,9 @@ Each client must use a unique aircraft ID in the format `AC-001`. The server das
 ## Repository Layout
 
 - `common/`: shared packet definitions, socket helpers, and timestamped logging.
-- `client/`: CLI aircraft client with handshake, telemetry, disconnect, and weather-map download flow.
-- `server/`: concurrent socket/state-machine loop, weather-map generation, and Dear ImGui dashboard rendering.
+- `client/`: modular CLI aircraft client split into option parsing, flight simulation, network/session handling, and console app orchestration.
+- `server/`: modular ground server split into option parsing, per-client session state, socket lifecycle, weather-map generation, state-machine handling, and Dear ImGui dashboard rendering.
+- `tests/`: modular Google Test files grouped by client helpers/options, server helpers/options/sessions/weather maps, packet/checksum/payload behavior, telemetry payloads, and state-machine rules.
 - `third_party/imgui/`: bundled Dear ImGui sources and OpenGL/GLFW backends.
 
 Logs are written under `runtime/logs/` with UTC timestamped filenames.
