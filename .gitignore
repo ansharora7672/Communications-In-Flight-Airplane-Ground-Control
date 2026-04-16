@@ -3,3 +3,4 @@ cmake-build-*/
 runtime/
 .DS_Store
 untracked_files/
+ci/__pycache__
