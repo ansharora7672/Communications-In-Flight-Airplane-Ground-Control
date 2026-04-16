@@ -85,8 +85,17 @@ enable_testing()
 add_executable(unit_tests
   tests/client_options_tests.cpp
   tests/client_utils_tests.cpp
+  tests/client_session_tests.cpp
+  tests/server_options_tests.cpp
+  tests/server_utils_tests.cpp
+  tests/weather_map_tests.cpp
   client/client_options.cpp
   client/client_utils.cpp
+  server/client_session.cpp
+  server/server_options.cpp
+  server/server_utils.cpp
+  server/state_machine.cpp
+  server/weather_map.cpp
 )
 target_include_directories(unit_tests PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/client
