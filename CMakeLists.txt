@@ -36,13 +36,23 @@ target_include_directories(common
 )
 
 add_executable(aircraft_client
+  client/aircraft_client.cpp
+  client/client_app.cpp
+  client/client_options.cpp
   client/main.cpp
+  client/client_utils.cpp
+  client/flight_sim.cpp
 )
 target_link_libraries(aircraft_client PRIVATE common)
 
 add_executable(ground_server
+  server/client_session.cpp
+  server/ground_server.cpp
   server/main.cpp
+  server/server_options.cpp
+  server/server_utils.cpp
   server/state_machine.cpp
+  server/weather_map.cpp
   server/imgui_dashboard.cpp
   ${IMGUI_SOURCES}
 )
