@@ -8,7 +8,7 @@
 #include "state_machine.h"
 
 TEST(ClientSessionTest, InitializesDisconnectedWithFirstServerSequence) {
-    // SVR-UT-021, REQ-STM-010: Session objects start disconnected with sequence tracking initialized.
+    // SVR-UT-024, REQ-STM-010: Session objects start disconnected with sequence tracking initialized.
     server::ClientSession session;
 
     EXPECT_EQ(session.socket(), INVALID_SOCK);
@@ -19,7 +19,7 @@ TEST(ClientSessionTest, InitializesDisconnectedWithFirstServerSequence) {
 }
 
 TEST(ClientSessionTest, TracksTelemetryAndSequenceNumbers) {
-    // SVR-UT-022, REQ-PKT-040: Session objects retain latest telemetry and packet sequence evidence.
+    // SVR-UT-025, REQ-PKT-040, REQ-STM-010: Session objects retain latest telemetry and packet sequence evidence.
     server::ClientSession session;
     const TelemetryPayload telemetry {43.46f, -80.52f, 35000.0f, 480.0f, 270.0f};
 
@@ -35,7 +35,7 @@ TEST(ClientSessionTest, TracksTelemetryAndSequenceNumbers) {
 }
 
 TEST(ClientSessionTest, TimeoutDependsOnActiveState) {
-    // SVR-UT-023, REQ-STM-030: Active sessions time out according to their current state.
+    // SVR-UT-026, REQ-STM-030: Active sessions time out according to their current state.
     server::ClientSession session;
     const auto start = std::chrono::steady_clock::now();
 
