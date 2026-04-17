@@ -3,7 +3,7 @@
 #include <atomic>
 #include <mutex>
 
-#include "imgui_dashboard.h"
+#include "dashboard_state.h"
 #include "logger.h"
 #include "server_options.h"
 #include "socket_utils.h"

@@ -33,7 +33,7 @@ std::uint32_t autoAircraftIdBase() {
         const auto ticks = static_cast<std::uint64_t>(
             std::chrono::high_resolution_clock::now().time_since_epoch().count());
         std::uint32_t mixed = static_cast<std::uint32_t>(ticks) ^ static_cast<std::uint32_t>(ticks >> 32);
-        mixed ^= static_cast<std::uint32_t>(processIdValue() * 2654435761u);
+        mixed ^= static_cast<std::uint32_t>(processIdValue()) * 2654435761u;
         return mixed % 999u;
     }();
     return base;

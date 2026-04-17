@@ -1,8 +1,10 @@
 #pragma once
 
+#include <algorithm>
 #include <cerrno>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <string>
 
 #ifdef _WIN32
@@ -11,6 +13,7 @@
   #pragma comment(lib, "ws2_32.lib")
 using SocketHandle = SOCKET;
 using SockLenType = int;
+using SocketTransferSize = int;
 #define INVALID_SOCK INVALID_SOCKET
 #define SOCK_ERR SOCKET_ERROR
 inline void initSockets() {
@@ -38,6 +41,7 @@ inline int getLastSocketError() { return WSAGetLastError(); }
   #include <unistd.h>
 using SocketHandle = int;
 using SockLenType = socklen_t;
+using SocketTransferSize = std::size_t;
 #define INVALID_SOCK -1
 #define SOCK_ERR -1
 inline void initSockets() {}
@@ -69,8 +73,11 @@ inline bool sendAll(SocketHandle socketHandle, const void* data, std::size_t siz
     const auto* bytes = static_cast<const char*>(data);
     std::size_t totalSent = 0;
     while (totalSent < size) {
-        const auto remaining = size - totalSent;
-        const int sent = send(socketHandle, bytes + totalSent, static_cast<int>(remaining), 0);
+        const std::size_t remaining = size - totalSent;
+        const SocketTransferSize chunkSize = static_cast<SocketTransferSize>((std::min)(
+            remaining,
+            static_cast<std::size_t>(std::numeric_limits<int>::max())));
+        const auto sent = send(socketHandle, bytes + totalSent, chunkSize, 0);
         if (sent == SOCK_ERR || sent == 0) {
             return false;
         }
@@ -83,8 +90,11 @@ inline bool recvAll(SocketHandle socketHandle, void* data, std::size_t size) {
     auto* bytes = static_cast<char*>(data);
     std::size_t totalRead = 0;
     while (totalRead < size) {
-        const auto remaining = size - totalRead;
-        const int received = recv(socketHandle, bytes + totalRead, static_cast<int>(remaining), 0);
+        const std::size_t remaining = size - totalRead;
+        const SocketTransferSize chunkSize = static_cast<SocketTransferSize>((std::min)(
+            remaining,
+            static_cast<std::size_t>(std::numeric_limits<int>::max())));
+        const auto received = recv(socketHandle, bytes + totalRead, chunkSize, 0);
         if (received <= 0) {
             return false;
         }

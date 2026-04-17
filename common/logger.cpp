@@ -14,8 +14,6 @@
 
 namespace {
 
-const std::filesystem::path kLogsRoot = "runtime/logs";
-
 std::string makeTimestampPrefix() {
     const auto now = std::chrono::system_clock::now();
     const auto milliseconds =
@@ -45,22 +43,23 @@ std::string makeBlackBoxLogName(const std::string& prefix) {
     return prefix + "_blackbox.log";
 }
 
-std::filesystem::path logDirectoryForRole(const std::string& role) {
+std::filesystem::path logDirectoryForRole(const std::filesystem::path& logsRoot, const std::string& role) {
     if (role == "aircraft") {
-        return kLogsRoot / "aircraft_comms";
+        return logsRoot / "aircraft_comms";
     }
-    return kLogsRoot / "groundctrl_comms";
+    return logsRoot / "groundctrl_comms";
 }
 
 } // namespace
 
-Logger::Logger(const std::string& role) {
+Logger::Logger(const std::string& role, std::filesystem::path logsRoot)
+    : logsRoot(std::move(logsRoot)) {
     const std::string prefix = makeTimestampPrefix();
-    const std::filesystem::path commsDirectory = logDirectoryForRole(role);
+    const std::filesystem::path commsDirectory = logDirectoryForRole(this->logsRoot, role);
     std::filesystem::create_directories(commsDirectory);
     commsLog.open((commsDirectory / makeCommsLogName(role, prefix)).string(), std::ios::out);
     if (role == "groundctrl") {
-        const std::filesystem::path blackboxDirectory = kLogsRoot / "blackbox";
+        const std::filesystem::path blackboxDirectory = this->logsRoot / "blackbox";
         std::filesystem::create_directories(blackboxDirectory);
         blackBoxLog.open((blackboxDirectory / makeBlackBoxLogName(prefix)).string(), std::ios::out);
     }

@@ -12,18 +12,21 @@ TEST(PacketHeaderTest, SizeIsFixed) {
 TEST(PacketHeaderTest, MakeHeaderSetsAllFields) {
     // REQ-PKT-020: Header includes packet type, aircraft ID, sequence number, and payload size.
     PacketHeader header = makeHeader(PacketType::TELEMETRY, "AC-001", 1, sizeof(TelemetryPayload), 0);
+    const std::uint32_t sequenceNumber = header.sequence_number;
+    const std::uint32_t payloadSize = header.payload_size;
 
     EXPECT_EQ(header.packet_type, PacketType::TELEMETRY);
-    EXPECT_EQ(header.sequence_number, 1u);
-    EXPECT_EQ(header.payload_size, sizeof(TelemetryPayload));
+    EXPECT_EQ(sequenceNumber, 1u);
+    EXPECT_EQ(payloadSize, sizeof(TelemetryPayload));
     EXPECT_EQ(extractAircraftId(header.aircraft_id), "AC-001");
 }
 
 TEST(PacketHeaderTest, MakeHeaderStoresChecksum) {
     // REQ-PKT-070: Header stores the calculated checksum value for integrity checks.
     PacketHeader header = makeHeader(PacketType::TELEMETRY, "AC-001", 7, sizeof(TelemetryPayload), 1234);
+    const std::uint32_t checksum = header.checksum;
 
-    EXPECT_EQ(header.checksum, 1234u);
+    EXPECT_EQ(checksum, 1234u);
 }
 
 TEST(PacketHeaderTest, MakeHeaderAircraftIdTruncatesAt15Chars) {

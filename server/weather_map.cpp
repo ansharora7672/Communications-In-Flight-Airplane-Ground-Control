@@ -50,8 +50,8 @@ std::string generatedWeatherMapPathFor(const std::string& aircraftId, std::uint3
 
 std::uint32_t aircraftSeed(const std::string& aircraftId) {
     std::uint32_t seed = 2166136261u;
-    for (unsigned char ch : aircraftId) {
-        seed ^= ch;
+    for (const char ch : aircraftId) {
+        seed ^= static_cast<std::uint32_t>(static_cast<unsigned char>(ch));
         seed *= 16777619u;
     }
     return seed;

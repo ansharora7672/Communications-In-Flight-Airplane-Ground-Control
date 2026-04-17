@@ -1,5 +1,9 @@
 #include "client_session.h"
 
+#include <algorithm>
+#include <iomanip>
+#include <sstream>
+
 namespace server {
 
 ClientSession::ClientSession(SocketHandle socketHandle) : socketHandle(socketHandle) {}
@@ -42,9 +46,40 @@ bool ClientSession::hasTelemetry() const {
     return telemetryValid;
 }
 
-void ClientSession::updateTelemetry(const TelemetryPayload& payload) {
+void ClientSession::updateTelemetry(const TelemetryPayload& payload, std::chrono::steady_clock::time_point now) {
+    if (lastTelemetryPacketTime.time_since_epoch().count() != 0) {
+        lastTelemetryInterval = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastTelemetryPacketTime);
+    }
+    lastTelemetryPacketTime = now;
     latestTelemetry = payload;
     telemetryValid = true;
+    touch(now);
+}
+
+bool ClientSession::telemetryRateDegraded(std::chrono::steady_clock::time_point now) const {
+    if (machine.getState() != StateMachine::State::TELEMETRY || !telemetryValid ||
+        lastTelemetryPacketTime.time_since_epoch().count() == 0 || now <= lastTelemetryPacketTime) {
+        return false;
+    }
+
+    const auto age = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastTelemetryPacketTime);
+    const auto threshold =
+        std::max(std::chrono::milliseconds(1500), lastTelemetryInterval.count() > 0 ? lastTelemetryInterval * 2
+                                                                                     : std::chrono::milliseconds(0));
+    return age >= threshold && age < std::chrono::seconds(3);
+}
+
+std::string ClientSession::telemetryAlertMessage(std::chrono::steady_clock::time_point now) const {
+    if (!telemetryRateDegraded(now)) {
+        return "";
+    }
+
+    const auto ageMilliseconds =
+        std::chrono::duration_cast<std::chrono::milliseconds>(now - lastTelemetryPacketTime).count();
+    std::ostringstream out;
+    out << "Telemetry rate degraded: " << std::fixed << std::setprecision(1)
+        << (static_cast<double>(ageMilliseconds) / 1000.0) << "s since last packet.";
+    return out.str();
 }
 
 std::uint32_t ClientSession::serverSequence() const {

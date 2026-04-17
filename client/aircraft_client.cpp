@@ -337,8 +337,13 @@ void AircraftClient::receiveLargeFile(const PacketHeader& header) {
 
     std::uint32_t received = 0;
     while (received < header.payload_size && running.load()) {
-        const std::uint32_t chunk = std::min<std::uint32_t>(4096, header.payload_size - received);
-        const int bytes = recv(socket, reinterpret_cast<char*>(payload.data + received), static_cast<int>(chunk), 0);
+        const SocketTransferSize chunkSize =
+            static_cast<SocketTransferSize>((std::min<std::uint32_t>)(4096u, header.payload_size - received));
+        const auto bytes = recv(
+            socket,
+            reinterpret_cast<char*>(payload.data + received),
+            chunkSize,
+            0);
         if (bytes <= 0) {
             if (!running.load()) {
                 fileTransferActive.store(false);

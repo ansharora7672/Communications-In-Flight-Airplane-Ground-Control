@@ -26,7 +26,11 @@ public:
 
     const TelemetryPayload& telemetry() const;
     bool hasTelemetry() const;
-    void updateTelemetry(const TelemetryPayload& payload);
+    void updateTelemetry(
+        const TelemetryPayload& payload,
+        std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
+    bool telemetryRateDegraded(std::chrono::steady_clock::time_point now) const;
+    std::string telemetryAlertMessage(std::chrono::steady_clock::time_point now) const;
 
     std::uint32_t serverSequence() const;
     std::uint32_t consumeServerSequence();
@@ -45,6 +49,8 @@ private:
     std::uint32_t nextServerSequence = 1;
     std::uint32_t lastClientSequenceNumber = 0;
     std::chrono::steady_clock::time_point lastPacketTime = std::chrono::steady_clock::now();
+    std::chrono::steady_clock::time_point lastTelemetryPacketTime {};
+    std::chrono::milliseconds lastTelemetryInterval {0};
 };
 
 } // namespace server

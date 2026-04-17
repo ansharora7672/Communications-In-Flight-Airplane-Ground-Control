@@ -129,9 +129,12 @@ aviation_apply_source_warnings(SOURCES
 
 add_executable(ground_server
   server/client_session.cpp
+  server/dashboard_state.cpp
   server/ground_server.cpp
   server/main.cpp
   server/server_options.cpp
+  server/server_dashboard_sync.cpp
+  server/server_session_logic.cpp
   server/server_utils.cpp
   server/state_machine.cpp
   server/weather_map.cpp
@@ -147,9 +150,12 @@ target_link_libraries(ground_server PRIVATE common glfw OpenGL::GL)
 aviation_apply_linker_instrumentation(ground_server)
 aviation_apply_source_warnings(SOURCES
   server/client_session.cpp
+  server/dashboard_state.cpp
   server/ground_server.cpp
   server/main.cpp
   server/server_options.cpp
+  server/server_dashboard_sync.cpp
+  server/server_session_logic.cpp
   server/server_utils.cpp
   server/state_machine.cpp
   server/weather_map.cpp
@@ -181,14 +187,20 @@ FetchContent_MakeAvailable(googletest)
 enable_testing()
 
 add_executable(unit_tests
+  tests/dashboard_state_tests.cpp
   tests/checksum_tests.cpp
   tests/client_options_tests.cpp
   tests/client_session_tests.cpp
   tests/client_utils_tests.cpp
+  tests/imgui_dashboard_tests.cpp
   tests/large_file_payload_tests.cpp
+  tests/logger_tests.cpp
   tests/packet_header_tests.cpp
   tests/server_options_tests.cpp
+  tests/server_dashboard_sync_tests.cpp
+  tests/server_session_logic_tests.cpp
   tests/server_utils_tests.cpp
+  tests/socket_utils_tests.cpp
   tests/state_machine_tests.cpp
   tests/telemetry_payload_tests.cpp
   tests/weather_map_tests.cpp
@@ -196,15 +208,24 @@ add_executable(unit_tests
   client/client_utils.cpp
   common/logger.cpp
   server/client_session.cpp
+  server/dashboard_state.cpp
+  server/imgui_dashboard.cpp
   server/server_options.cpp
+  server/server_dashboard_sync.cpp
+  server/server_session_logic.cpp
   server/server_utils.cpp
   server/state_machine.cpp
   server/weather_map.cpp
+  third_party/imgui/imgui.cpp
+  third_party/imgui/imgui_draw.cpp
+  third_party/imgui/imgui_tables.cpp
+  third_party/imgui/imgui_widgets.cpp
 )
 target_include_directories(unit_tests PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/client
   ${CMAKE_CURRENT_SOURCE_DIR}/common
   ${CMAKE_CURRENT_SOURCE_DIR}/server
+  ${CMAKE_CURRENT_SOURCE_DIR}/third_party/imgui
 )
 target_link_libraries(unit_tests PRIVATE GTest::gtest_main)
 aviation_apply_linker_instrumentation(unit_tests)
@@ -213,7 +234,11 @@ aviation_apply_source_warnings(SOURCES
   client/client_utils.cpp
   common/logger.cpp
   server/client_session.cpp
+  server/dashboard_state.cpp
+  server/imgui_dashboard.cpp
   server/server_options.cpp
+  server/server_dashboard_sync.cpp
+  server/server_session_logic.cpp
   server/server_utils.cpp
   server/state_machine.cpp
   server/weather_map.cpp

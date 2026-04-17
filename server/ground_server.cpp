@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
+#include <csignal>
 #include <cstring>
 #include <ctime>
 #include <filesystem>
@@ -26,7 +27,10 @@
 #include "imgui_impl_opengl3_loader.h"
 
 #include "client_session.h"
+#include "imgui_dashboard.h"
 #include "packet.h"
+#include "server_dashboard_sync.h"
+#include "server_session_logic.h"
 #include "server_utils.h"
 #include "weather_map.h"
 
@@ -38,6 +42,40 @@ const std::string kImguiIniPath = "runtime/ui/imgui.ini";
 
 using SessionMap = std::map<SocketHandle, ClientSession>;
 
+#ifndef _WIN32
+std::atomic<bool>* gSignalRunningFlag = nullptr;
+
+void handleTerminationSignal(int) {
+    if (gSignalRunningFlag != nullptr) {
+        gSignalRunningFlag->store(false);
+    }
+}
+
+class ScopedSignalHandler {
+public:
+    explicit ScopedSignalHandler(std::atomic<bool>& running) {
+        gSignalRunningFlag = &running;
+        previousSigInt = std::signal(SIGINT, handleTerminationSignal);
+        previousSigTerm = std::signal(SIGTERM, handleTerminationSignal);
+    }
+
+    ~ScopedSignalHandler() {
+        gSignalRunningFlag = nullptr;
+        std::signal(SIGINT, previousSigInt);
+        std::signal(SIGTERM, previousSigTerm);
+    }
+
+private:
+    void (*previousSigInt)(int) = SIG_DFL;
+    void (*previousSigTerm)(int) = SIG_DFL;
+};
+#else
+class ScopedSignalHandler {
+public:
+    explicit ScopedSignalHandler(std::atomic<bool>&) {}
+};
+#endif
+
 std::string timeStampHmsUtc() {
     const std::time_t now = std::time(nullptr);
     const std::tm* utcNow = std::gmtime(&now);
@@ -48,20 +86,18 @@ std::string timeStampHmsUtc() {
 
 void appendDashboardLog(SharedServerState& sharedState, const std::string& entry) {
     std::lock_guard<std::mutex> lock(sharedState.mutex);
-    sharedState.dashboard.recentLogEntries.push_front(entry);
-    if (sharedState.dashboard.recentLogEntries.size() > 20) {
-        sharedState.dashboard.recentLogEntries.pop_back();
-    }
+    appendDashboardLogEntry(sharedState.dashboard, entry);
 }
 
 std::string compactPacketLog(const std::string& direction, const PacketHeader& header) {
-    std::ostringstream line;
-    line << "[" << timeStampHmsUtc() << "] "
-         << direction << ' '
-         << packetTypeToString(header.packet_type)
-         << " Seq=" << header.sequence_number
-         << ' ' << extractAircraftId(header.aircraft_id);
-    return line.str();
+    return server::compactPacketLog(timeStampHmsUtc(), direction, header);
+}
+
+std::string dashboardAlertMessage(const ClientSession& session, const std::string& explicitAlert = std::string()) {
+    if (!explicitAlert.empty()) {
+        return explicitAlert;
+    }
+    return session.telemetryAlertMessage(std::chrono::steady_clock::now());
 }
 
 void updateDashboardAircraft(
@@ -73,17 +109,7 @@ void updateDashboardAircraft(
     }
 
     std::lock_guard<std::mutex> lock(sharedState.mutex);
-    auto& aircraft = sharedState.dashboard.aircraft[session.aircraftId()];
-    aircraft.aircraftId = session.aircraftId();
-    aircraft.state = session.stateMachine().getState();
-    aircraft.connected = isVerifiedSessionState(session.stateMachine().getState());
-    aircraft.telemetry = session.telemetry();
-    aircraft.telemetryValid = session.hasTelemetry();
-    aircraft.alertMessage = alertMessage;
-
-    if (sharedState.dashboard.selectedAircraftId.empty()) {
-        sharedState.dashboard.selectedAircraftId = session.aircraftId();
-    }
+    syncDashboardAircraft(sharedState.dashboard, session, dashboardAlertMessage(session, alertMessage));
 }
 
 std::string consumeWeatherRequest(SharedServerState& sharedState) {
@@ -110,17 +136,17 @@ bool sendPacket(SocketHandle socketHandle, const PacketHeader& header, const std
     return true;
 }
 
-bool aircraftIdInUse(const SessionMap& sessions, SocketHandle currentSocket, const std::string& aircraftId) {
+std::vector<ActiveSessionSummary> activeSessionSummaries(const SessionMap& sessions) {
+    std::vector<ActiveSessionSummary> summaries;
+    summaries.reserve(sessions.size());
     for (const auto& [socketHandle, session] : sessions) {
-        if (socketHandle == currentSocket) {
-            continue;
-        }
-        if (session.aircraftId() == aircraftId &&
-            session.stateMachine().getState() != StateMachine::State::DISCONNECTED) {
-            return true;
-        }
+        summaries.push_back(ActiveSessionSummary {
+            socketHandle,
+            session.aircraftId(),
+            session.stateMachine().getState(),
+        });
     }
-    return false;
+    return summaries;
 }
 
 void logIgnoredOperatorRequest(
@@ -128,11 +154,8 @@ void logIgnoredOperatorRequest(
     Logger& logger,
     const ClientSession& session,
     const std::string& action) {
-    const std::string aircraftId = session.aircraftId().empty() ? "UNKNOWN" : session.aircraftId();
-    const std::string state = session.stateMachine().stateToString(session.stateMachine().getState());
     const std::string message =
-        "Ignored operator " + action + " request for " + aircraftId +
-        " because the session is not verified (" + state + ").";
+        ignoredOperatorRequestMessage(session.aircraftId(), session.stateMachine().getState(), action);
     logger.logInfo(message);
     appendDashboardLog(sharedState, "[" + timeStampHmsUtc() + "] INFO " + message);
 }
@@ -147,10 +170,7 @@ void handleFault(
         session.stateMachine().transition(StateMachine::State::FAULT);
     }
     logger.logFault(cause, session.stateMachine().stateToString(currentState), session.lastClientSequence());
-    appendDashboardLog(
-        sharedState,
-        "[" + timeStampHmsUtc() + "] FAULT " +
-            (session.aircraftId().empty() ? std::string("UNKNOWN") : session.aircraftId() + " ") + cause);
+    appendDashboardLog(sharedState, faultDashboardEntry(timeStampHmsUtc(), session.aircraftId(), cause));
     updateDashboardAircraft(sharedState, session, cause);
     session.stateMachine().transition(StateMachine::State::DISCONNECTED);
     updateDashboardAircraft(sharedState, session);
@@ -256,10 +276,7 @@ bool processHandshake(
     const std::string aircraftId = extractAircraftId(header.aircraft_id);
 
     const bool validRequest =
-        header.packet_type == PacketType::HANDSHAKE_REQUEST &&
-        header.payload_size == 0 &&
-        validateAircraftId(aircraftId) &&
-        !aircraftIdInUse(sessions, session.socket(), aircraftId);
+        isValidHandshakeRequest(header, aircraftId, aircraftIdInUse(activeSessionSummaries(sessions), session.socket(), aircraftId));
 
     if (!validRequest) {
         PacketHeader failHeader = makeHeader(PacketType::HANDSHAKE_FAIL, aircraftId, header.sequence_number, 0, 0);
@@ -424,6 +441,7 @@ void serverThreadMain(
         const auto now = std::chrono::steady_clock::now();
         std::vector<SocketHandle> timedOutSessions;
         for (const auto& [socketHandle, session] : sessions) {
+            updateDashboardAircraft(sharedState, session);
             if (session.timedOut(now)) {
                 timedOutSessions.push_back(socketHandle);
             }
@@ -566,6 +584,7 @@ bool GroundServer::openListenSocket() {
 }
 
 int GroundServer::runHeadless() {
+    ScopedSignalHandler signalHandler(running);
     std::cout << "Ground server running in headless mode on port " << options.listenPort << ".\n";
     std::thread worker(serverThreadMain, listenSocket, std::ref(running), std::ref(logger), std::ref(sharedState));
     if (worker.joinable()) {

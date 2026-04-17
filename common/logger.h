@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <filesystem>
 #include <fstream>
 #include <mutex>
 #include <string>
@@ -9,7 +10,7 @@
 
 class Logger {
 public:
-    explicit Logger(const std::string& role);
+    explicit Logger(const std::string& role, std::filesystem::path logsRoot = std::filesystem::path("runtime/logs"));
 
     void logPacket(const std::string& direction, const PacketHeader& hdr);
     void logFault(const std::string& cause, const std::string& state, std::uint32_t seq);
@@ -18,6 +19,7 @@ public:
 private:
     std::string timestampUtc() const;
 
+    std::filesystem::path logsRoot;
     std::ofstream commsLog;
     std::ofstream blackBoxLog;
     mutable std::mutex mutex;
