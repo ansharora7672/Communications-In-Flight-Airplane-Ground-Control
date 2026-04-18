@@ -70,6 +70,11 @@ class OutputCollector:
         return self.text()
 
 
+def close_process_stdin(process: subprocess.Popen[str]) -> None:
+    if process.stdin is not None and not process.stdin.closed:
+        process.stdin.close()
+
+
 def candidate_executable_paths(name: str) -> list[Path]:
     suffix = ".exe" if os.name == "nt" else ""
     candidates: list[Path] = []
@@ -406,6 +411,7 @@ def run_nominal_scenario(server_executable: Path, client_executable: Path, mode:
         send_line(client_process, "D\n")
         wait_for_client_disconnected(client_output, "client disconnect")
         send_line(client_process, "Q\n")
+        close_process_stdin(client_process)
         final_output = client_output.wait_for_exit(timeout_seconds=CLIENT_TIMEOUT_SECONDS)
 
         if client_process.returncode != 0:
@@ -465,6 +471,7 @@ def run_fault_scenario(server_executable: Path, client_executable: Path, mode: s
         send_line(recovery_client, "D\n")
         wait_for_client_disconnected(recovery_output, "recovery client disconnect")
         send_line(recovery_client, "Q\n")
+        close_process_stdin(recovery_client)
         final_recovery_output = recovery_output.wait_for_exit(timeout_seconds=CLIENT_TIMEOUT_SECONDS)
         if recovery_client.returncode != 0:
             raise RuntimeError(
