@@ -34,6 +34,11 @@ inline void shutdownSocket(SocketHandle s) {
         shutdown(s, SD_BOTH);
     }
 }
+inline void shutdownSocketSend(SocketHandle s) {
+    if (s != INVALID_SOCK) {
+        shutdown(s, SD_SEND);
+    }
+}
 inline int getLastSocketError() { return WSAGetLastError(); }
 #else
   #include <arpa/inet.h>
@@ -57,6 +62,11 @@ inline void closeSocket(SocketHandle s) {
 inline void shutdownSocket(SocketHandle s) {
     if (s != INVALID_SOCK) {
         shutdown(s, SHUT_RDWR);
+    }
+}
+inline void shutdownSocketSend(SocketHandle s) {
+    if (s != INVALID_SOCK) {
+        shutdown(s, SHUT_WR);
     }
 }
 inline int getLastSocketError() { return errno; }

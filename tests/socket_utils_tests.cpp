@@ -57,3 +57,19 @@ TEST(SocketUtilsTest, RecvAllReturnsFalseWhenPeerClosesEarly) {
     std::array<char, 8> buffer {};
     EXPECT_FALSE(recvAll(pair.server, buffer.data(), buffer.size()));
 }
+
+TEST(SocketUtilsTest, ShutdownSocketSendPreservesBufferedBytesBeforeClosure) {
+    SocketRuntimeGuard sockets;
+    ConnectedSocketPair pair = makeConnectedSocketPair();
+    const std::string payload = "DONE";
+    std::array<char, 4> received {};
+
+    ASSERT_EQ(send(pair.client, payload.data(), static_cast<int>(payload.size()), 0), 4);
+    shutdownSocketSend(pair.client);
+
+    ASSERT_TRUE(recvAll(pair.server, received.data(), received.size()));
+    EXPECT_EQ(std::string(received.data(), received.size()), payload);
+
+    char extra = '\0';
+    EXPECT_EQ(recv(pair.server, &extra, 1, 0), 0);
+}

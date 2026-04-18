@@ -244,6 +244,7 @@ bool sendWeatherMap(ClientSession& session, Logger& logger, SharedServerState& s
         sharedState,
         "[" + timeStampHmsUtc() + "] MAP " + session.aircraftId() + " " +
             std::filesystem::path(weatherMapPath).filename().string());
+    session.touch();
     session.stateMachine().transition(StateMachine::State::CONNECTED);
     updateDashboardAircraft(sharedState, session);
     return true;
@@ -297,6 +298,7 @@ bool processHandshake(
 
     logger.logPacket("TX", ackHeader);
     appendDashboardLog(sharedState, compactPacketLog("TX", ackHeader));
+    session.touch();
     session.stateMachine().transition(StateMachine::State::CONNECTED);
     updateDashboardAircraft(sharedState, session);
     return true;
@@ -428,6 +430,7 @@ void serverThreadMain(
                 if (sendPacket(session.socket(), disconnectHeader, nullptr)) {
                     logger.logPacket("TX", disconnectHeader);
                     appendDashboardLog(sharedState, compactPacketLog("TX", disconnectHeader));
+                    session.touch();
                     session.stateMachine().transition(StateMachine::State::DISCONNECTED);
                     updateDashboardAircraft(sharedState, session);
                 } else {

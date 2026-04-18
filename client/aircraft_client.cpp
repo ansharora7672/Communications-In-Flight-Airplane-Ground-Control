@@ -249,13 +249,19 @@ void AircraftClient::disconnectSession() {
         return;
     }
 
-    PacketHeader disconnectHeader = makeHeader(PacketType::DISCONNECT, id, nextSequence++, 0, 0);
-    sendPacketLocked(disconnectHeader, nullptr);
-    logger.logPacket("TX", disconnectHeader);
+    const bool wasRunning = running.exchange(false);
+    if (wasRunning) {
+        PacketHeader disconnectHeader = makeHeader(PacketType::DISCONNECT, id, nextSequence++, 0, 0);
+        if (sendPacketLocked(disconnectHeader, nullptr)) {
+            logger.logPacket("TX", disconnectHeader);
+        }
 
-    setState(ClientState::DISCONNECTED, "[INFO] Disconnected from ground control.");
-    running.store(false);
-    shutdownSocket(socket);
+        setState(ClientState::DISCONNECTED, "[INFO] Disconnected from ground control.");
+        fileTransferActive.store(false);
+        shutdownSocketSend(socket);
+        return;
+    }
+
     closeSocket(socket);
     socket = INVALID_SOCK;
     fileTransferActive.store(false);

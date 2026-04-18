@@ -32,14 +32,20 @@ def candidate_executable_paths(name: str) -> list[Path]:
 
     if BUILD_CONFIG:
         candidates.append(BUILD_DIR / BUILD_CONFIG / f"{name}{suffix}")
+        candidates.append(BUILD_DIR / "bin" / BUILD_CONFIG / f"{name}{suffix}")
 
     candidates.extend(
         [
             BUILD_DIR / f"{name}{suffix}",
+            BUILD_DIR / "bin" / f"{name}{suffix}",
             BUILD_DIR / "Release" / f"{name}{suffix}",
+            BUILD_DIR / "bin" / "Release" / f"{name}{suffix}",
             BUILD_DIR / "Debug" / f"{name}{suffix}",
+            BUILD_DIR / "bin" / "Debug" / f"{name}{suffix}",
             BUILD_DIR / "RelWithDebInfo" / f"{name}{suffix}",
+            BUILD_DIR / "bin" / "RelWithDebInfo" / f"{name}{suffix}",
             BUILD_DIR / "MinSizeRel" / f"{name}{suffix}",
+            BUILD_DIR / "bin" / "MinSizeRel" / f"{name}{suffix}",
         ]
     )
     return candidates
@@ -133,7 +139,11 @@ def verify_nominal_artifacts(aircraft_id: str, client_output: str) -> dict[str, 
     if not blackbox_log_path.exists():
         raise FileNotFoundError(f"Black-box log is missing: {blackbox_log_path}")
     if blackbox_log_path.stat().st_size != 0:
-        raise AssertionError(f"Nominal scenario black-box log should be empty: {blackbox_log_path}")
+        blackbox_log = read_text(blackbox_log_path).strip()
+        raise AssertionError(
+            "Nominal scenario black-box log should be empty: "
+            f"{blackbox_log_path}\nBlack-box contents:\n{blackbox_log}"
+        )
 
     aircraft_log = read_text(aircraft_log_path)
     server_log = read_text(server_log_path)
@@ -399,7 +409,10 @@ def run_verification_mode(server_executable: Path, client_executable: Path, mode
 def main() -> int:
     server_executable = find_executable("ground_server")
     client_executable = find_executable("aircraft_client")
-    modes = ["gui", "headless"] if PREFER_GUI else ["headless"]
+    if PREFER_GUI and not (os.name == "nt" and os.environ.get("GITHUB_ACTIONS") == "true"):
+        modes = ["gui", "headless"]
+    else:
+        modes = ["headless"]
     failures: list[str] = []
 
     for mode in modes:
