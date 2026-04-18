@@ -369,6 +369,11 @@ void AircraftClient::receiveLargeFile(const PacketHeader& header) {
         printLine(progress.str());
     }
 
+    if (!running.load()) {
+        fileTransferActive.store(false);
+        return;
+    }
+
     if (computeChecksum(payload.data, payload.size) != header.checksum) {
         setState(ClientState::FAULT, "[FAULT] Weather map checksum mismatch.");
         logger.logFault("ChecksumMismatch", stateToString(ClientState::LARGE_FILE_TRANSFER), header.sequence_number);

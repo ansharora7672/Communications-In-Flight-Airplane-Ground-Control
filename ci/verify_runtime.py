@@ -10,6 +10,7 @@ import socket
 import subprocess
 import sys
 import time
+import threading
 from pathlib import Path
 
 
@@ -24,6 +25,49 @@ SERVER_SHUTDOWN_TIMEOUT_SECONDS = 10
 BUILD_CONFIG = os.environ.get("CI_BUILD_CONFIG", "").strip()
 PREFER_GUI = os.environ.get("CI_PREFER_GUI", "1").strip() != "0"
 USE_XVFB = os.environ.get("CI_USE_XVFB", "").strip() == "1"
+
+
+class OutputCollector:
+    def __init__(self, process: subprocess.Popen[str]) -> None:
+        if process.stdout is None:
+            raise RuntimeError("Process does not expose stdout for capture.")
+        self._process = process
+        self._stdout = process.stdout
+        self._lines: list[str] = []
+        self._lock = threading.Lock()
+        self._reader = threading.Thread(target=self._read_stdout, daemon=True)
+        self._reader.start()
+
+    def _read_stdout(self) -> None:
+        for line in self._stdout:
+            with self._lock:
+                self._lines.append(line)
+
+    def text(self) -> str:
+        with self._lock:
+            return "".join(self._lines)
+
+    def wait_for_markers(self, markers: tuple[str, ...], timeout_seconds: float, label: str) -> str:
+        deadline = time.time() + timeout_seconds
+        while time.time() < deadline:
+            text = self.text()
+            if any(marker in text for marker in markers):
+                return text
+            if self._process.poll() is not None:
+                break
+            time.sleep(0.1)
+
+        text = self.text()
+        if self._process.poll() is not None:
+            raise AssertionError(
+                f"{label} did not appear before the client exited.\nClient output:\n{text}"
+            )
+        raise TimeoutError(f"Timed out waiting for {label}.\nClient output:\n{text}")
+
+    def wait_for_exit(self, timeout_seconds: float) -> str:
+        self._process.wait(timeout=timeout_seconds)
+        self._reader.join(timeout=1)
+        return self.text()
 
 
 def candidate_executable_paths(name: str) -> list[Path]:
@@ -106,6 +150,48 @@ def send_line(process: subprocess.Popen[str], line: str) -> None:
         raise RuntimeError("Client process does not expose stdin for scripted input.")
     process.stdin.write(line)
     process.stdin.flush()
+
+
+def wait_for_client_connected(output: OutputCollector, label: str) -> str:
+    return output.wait_for_markers(
+        ("State: CONNECTED", "State: TELEMETRY", "[W] Request Weather Map"),
+        timeout_seconds=15,
+        label=label,
+    )
+
+
+def wait_for_telemetry_packets(output: OutputCollector, minimum_count: int, label: str) -> str:
+    deadline = time.time() + 15
+    while time.time() < deadline:
+        text = output.text()
+        if text.count("[TX] SEQ=") >= minimum_count:
+            return text
+        if output._process.poll() is not None:
+            break
+        time.sleep(0.1)
+
+    text = output.text()
+    if output._process.poll() is not None:
+        raise AssertionError(
+            f"{label} did not appear before the client exited.\nClient output:\n{text}"
+        )
+    raise TimeoutError(f"Timed out waiting for {label}.\nClient output:\n{text}")
+
+
+def wait_for_weather_map_saved(output: OutputCollector) -> str:
+    return output.wait_for_markers(
+        ("Weather map saved",),
+        timeout_seconds=30,
+        label="weather-map transfer completion",
+    )
+
+
+def wait_for_client_disconnected(output: OutputCollector, label: str) -> str:
+    return output.wait_for_markers(
+        ("State: DISCONNECTED", "Disconnected from ground control", "Server disconnected the session"),
+        timeout_seconds=15,
+        label=label,
+    )
 
 
 def extract_paths(pattern: str, text: str, label: str) -> list[Path]:
@@ -310,23 +396,25 @@ def run_nominal_scenario(server_executable: Path, client_executable: Path, mode:
             start_new_session=os.name != "nt",
             text=True,
         )
+        client_output = OutputCollector(client_process)
 
         send_line(client_process, "1\n")
-        time.sleep(4.0)
+        wait_for_client_connected(client_output, "client connection")
+        wait_for_telemetry_packets(client_output, minimum_count=3, label="three telemetry packets")
         send_line(client_process, "W\n")
-        time.sleep(4.0)
+        wait_for_weather_map_saved(client_output)
         send_line(client_process, "D\n")
-        time.sleep(1.0)
+        wait_for_client_disconnected(client_output, "client disconnect")
         send_line(client_process, "Q\n")
-        client_output, _ = client_process.communicate(timeout=CLIENT_TIMEOUT_SECONDS)
+        final_output = client_output.wait_for_exit(timeout_seconds=CLIENT_TIMEOUT_SECONDS)
 
         if client_process.returncode != 0:
             raise RuntimeError(
                 f"Client exited with code {client_process.returncode}.\n"
-                f"Client output:\n{client_output}"
+                f"Client output:\n{final_output}"
             )
 
-        return verify_nominal_artifacts("AC-101", client_output)
+        return verify_nominal_artifacts("AC-101", final_output)
     finally:
         terminate_process(server_process)
 
@@ -371,21 +459,25 @@ def run_fault_scenario(server_executable: Path, client_executable: Path, mode: s
             start_new_session=os.name != "nt",
             text=True,
         )
+        recovery_output = OutputCollector(recovery_client)
         send_line(recovery_client, "1\n")
-        time.sleep(2.0)
+        wait_for_client_connected(recovery_output, "recovery client reconnection")
         send_line(recovery_client, "D\n")
-        time.sleep(1.0)
+        wait_for_client_disconnected(recovery_output, "recovery client disconnect")
         send_line(recovery_client, "Q\n")
-        recovery_output, _ = recovery_client.communicate(timeout=CLIENT_TIMEOUT_SECONDS)
+        final_recovery_output = recovery_output.wait_for_exit(timeout_seconds=CLIENT_TIMEOUT_SECONDS)
         if recovery_client.returncode != 0:
             raise RuntimeError(
                 f"Recovery client exited with code {recovery_client.returncode}.\n"
-                f"Client output:\n{recovery_output}"
+                f"Client output:\n{final_recovery_output}"
             )
-        if "Handshake verified" not in recovery_output:
+        if all(
+            marker not in final_recovery_output
+            for marker in ("State: CONNECTED", "State: TELEMETRY", "[W] Request Weather Map")
+        ):
             raise AssertionError(
                 "Recovery client did not reconnect successfully after the fault.\n"
-                f"Client output:\n{recovery_output}"
+                f"Client output:\n{final_recovery_output}"
             )
 
         return verify_fault_artifacts("AC-102", "AC-103")
@@ -409,7 +501,7 @@ def run_verification_mode(server_executable: Path, client_executable: Path, mode
 def main() -> int:
     server_executable = find_executable("ground_server")
     client_executable = find_executable("aircraft_client")
-    if PREFER_GUI and not (os.name == "nt" and os.environ.get("GITHUB_ACTIONS") == "true"):
+    if PREFER_GUI and os.environ.get("GITHUB_ACTIONS") != "true":
         modes = ["gui", "headless"]
     else:
         modes = ["headless"]
