@@ -8,6 +8,9 @@
 #include <string>
 
 #ifdef _WIN32
+  #ifndef NOMINMAX
+    #define NOMINMAX
+  #endif
   #include <winsock2.h>
   #include <ws2tcpip.h>
   #pragma comment(lib, "ws2_32.lib")
@@ -76,7 +79,7 @@ inline bool sendAll(SocketHandle socketHandle, const void* data, std::size_t siz
         const std::size_t remaining = size - totalSent;
         const SocketTransferSize chunkSize = static_cast<SocketTransferSize>((std::min)(
             remaining,
-            static_cast<std::size_t>(std::numeric_limits<int>::max())));
+            static_cast<std::size_t>((std::numeric_limits<int>::max)())));
         const auto sent = send(socketHandle, bytes + totalSent, chunkSize, 0);
         if (sent == SOCK_ERR || sent == 0) {
             return false;
@@ -93,7 +96,7 @@ inline bool recvAll(SocketHandle socketHandle, void* data, std::size_t size) {
         const std::size_t remaining = size - totalRead;
         const SocketTransferSize chunkSize = static_cast<SocketTransferSize>((std::min)(
             remaining,
-            static_cast<std::size_t>(std::numeric_limits<int>::max())));
+            static_cast<std::size_t>((std::numeric_limits<int>::max)())));
         const auto received = recv(socketHandle, bytes + totalRead, chunkSize, 0);
         if (received <= 0) {
             return false;

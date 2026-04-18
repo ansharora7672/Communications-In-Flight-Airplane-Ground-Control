@@ -63,9 +63,9 @@ bool ClientSession::telemetryRateDegraded(std::chrono::steady_clock::time_point 
     }
 
     const auto age = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastTelemetryPacketTime);
-    const auto threshold =
-        std::max(std::chrono::milliseconds(1500), lastTelemetryInterval.count() > 0 ? lastTelemetryInterval * 2
-                                                                                     : std::chrono::milliseconds(0));
+    const auto threshold = (std::max)(
+        std::chrono::milliseconds(1500),
+        lastTelemetryInterval.count() > 0 ? lastTelemetryInterval * 2 : std::chrono::milliseconds(0));
     return age >= threshold && age < std::chrono::seconds(3);
 }
 
