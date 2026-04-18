@@ -6,3 +6,4 @@ reports/analysis/
 untracked_files/
 ci/__pycache__
 skills/
+/scripts
